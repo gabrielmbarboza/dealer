@@ -1,0 +1,9 @@
+services:
+  - name: "service1"
+    path: "catalog"
+    url: "http://0.0.0.0:3001"
+  - name: "service2"
+    path: "checkout"
+    url: "http://0.0.0.0:3002"
+    methods:
+      - "GET"
