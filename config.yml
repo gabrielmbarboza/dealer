@@ -1,9 +1,16 @@
 services:
   - name: "service1"
-    path: "catalog"
-    url: "http://0.0.0.0:3001"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
   - name: "service2"
-    path: "checkout"
-    url: "http://0.0.0.0:3002"
+    path: "/checkout"
+    origin_url: "http://0.0.0.0:3002"
     methods:
       - "GET"
+  - name: "service3"
+    path: "/sales"
+    origin_url: "http://0.0.0.0:3003"
+    methods:
+      - "GET"
+      - "POST"
+      - "PUT"
