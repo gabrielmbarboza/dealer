@@ -3,8 +3,8 @@ FROM golang:alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /go/src/app
 COPY . .
-RUN go get -d -v ./...
-RUN go build -o /go/bin/app -v ./...
+RUN go mod download
+RUN go build -o /go/bin/app -v ./cmd/dealer
 
 #final stage
 FROM alpine:latest
