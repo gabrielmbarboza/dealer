@@ -1,4 +1,4 @@
-package dealer
+package config
 
 type Info struct {
 	ProjectName string `json:"project_name"`
