@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gabrielmbarboza/dealer/internal/dealer"
+	dealer "github.com/gabrielmbarboza/dealer/config"
 	"gopkg.in/yaml.v3"
 )
 
