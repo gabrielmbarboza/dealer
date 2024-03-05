@@ -1,6 +1,6 @@
 # Dealer
 
-![alt text](https://github.com/gabrielmbarboza/dealer/blob/main/assets/images/dealer.jpg?raw=true)
+![alt text](https://github.com/gabrielmbarboza/dealer/blob/main/assets/images/dealer_logo.jpg?raw=true)
 
 ## Table of Contents
 
