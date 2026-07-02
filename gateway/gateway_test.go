@@ -378,6 +378,65 @@ services:
 	})
 }
 
+func TestGateway_MetricsHandlerReflectsRequestsAcrossServices(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	catalog := newEchoOrigin(t, "catalog", nil)
+	payments := newEchoOrigin(t, "payments", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: %q
+  - name: "payments"
+    path: "/payments"
+    origin_url: %q
+    methods: ["POST"]
+    plugins:
+      - name: jwt_auth
+        config:
+          secret_env: JWT_SECRET
+`, catalog.URL, payments.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	if resp, err := http.Get(server.URL + "/catalog"); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	} else {
+		resp.Body.Close()
+	}
+
+	if resp, err := http.Post(server.URL+"/payments", "application/json", strings.NewReader(`{}`)); err != nil {
+		t.Fatalf("Post() error = %v", err)
+	} else {
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("payments status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+		}
+		resp.Body.Close()
+	}
+
+	metricsRec := httptest.NewRecorder()
+	gw.MetricsHandler().ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := metricsRec.Body.String()
+
+	if !strings.Contains(body, `dealer_http_requests_total{method="GET",service="catalog",status="200"} 1`) {
+		t.Fatalf("body missing catalog 200 count, got:\n%s", body)
+	}
+	if !strings.Contains(body, `dealer_http_requests_total{method="POST",service="payments",status="401"} 1`) {
+		t.Fatalf("body missing payments 401 count, got:\n%s", body)
+	}
+}
+
 func TestGateway_OriginTimeoutReturnsBadGatewayForSlowOrigin(t *testing.T) {
 	unblock := make(chan struct{})
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

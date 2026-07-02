@@ -86,6 +86,8 @@ func main() {
 	}
 	defer gw.Close()
 
+	metricsSrv := newMetricsServer(os.Getenv("DEALER_METRICS_ADDR"), gw.MetricsHandler())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", infoHandler)
 	mux.Handle("/", gw)
@@ -116,6 +118,15 @@ func main() {
 		}()
 	}
 
+	if metricsSrv != nil {
+		go func() {
+			log.Printf("main: metrics server listening on %s", metricsSrv.Addr)
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("main: metrics server error: %v", err)
+			}
+		}()
+	}
+
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -127,6 +138,9 @@ func main() {
 		defer cancel()
 		if debugSrv != nil {
 			_ = debugSrv.Shutdown(shutdownCtx)
+		}
+		if metricsSrv != nil {
+			_ = metricsSrv.Shutdown(shutdownCtx)
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Fatalf("main: graceful shutdown failed: %v", err)
@@ -145,6 +159,19 @@ func newDebugServer(addr string) *http.Server {
 	}
 	return &http.Server{
 		Addr:              addr,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+}
+
+func newMetricsServer(addr string, handler http.Handler) *http.Server {
+	if addr == "" {
+		return nil
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", handler)
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 }

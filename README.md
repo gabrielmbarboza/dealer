@@ -94,6 +94,7 @@ Environment variables:
 - `DEALER_MAX_BODY_BYTES` — default request body size cap (in bytes) applied to every service, even ones without their own `request_size_limiting` plugin (default: `10485760`, i.e. 10 MiB).
 - `DEALER_UNHEALTHY_COOLDOWN` — for services using `origin_urls`, how long an origin is skipped after a failed request before being retried, as a Go duration (default: `10s`).
 - `DEALER_DEBUG_ADDR` — if set, starts a `net/http/pprof` server on this address (e.g. `127.0.0.1:6060`), separate from the public gateway port. Disabled by default; bind it to a local/internal interface only.
+- `DEALER_METRICS_ADDR` — if set, exposes a Prometheus `GET /metrics` endpoint on this address (e.g. `127.0.0.1:9090`), separate from the public gateway port. Disabled by default; bind it to a local/internal interface only. Metrics are collected regardless of whether this is set, so enabling it later doesn't lose history. Exposes `dealer_http_requests_total` (labels `service`, `method`, `status`) and `dealer_http_request_duration_seconds` (labels `service`, `method`).
 - Any variable referenced by a `jwt_auth` plugin's `secret_env` (e.g. `JWT_SECRET`) must be set for that plugin to validate tokens.
 
 Example request, assuming a service is configured as above and a valid JWT is available:

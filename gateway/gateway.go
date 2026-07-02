@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gabrielmbarboza/dealer/gateway/internal/config"
+	"github.com/gabrielmbarboza/dealer/gateway/internal/metrics"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/plugin"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/proxy"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/router"
@@ -52,8 +53,9 @@ type Options struct {
 // Gateway is an http.Handler that forwards requests to internal services
 // as described by a hot-reloadable YAML config file.
 type Gateway struct {
-	mux    atomic.Pointer[http.ServeMux]
-	cancel context.CancelFunc
+	mux     atomic.Pointer[http.ServeMux]
+	cancel  context.CancelFunc
+	metrics *metrics.Recorder
 }
 
 // New loads configPath, builds the initial routing table, and starts a
@@ -64,7 +66,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		return nil, err
 	}
 
-	gw := &Gateway{}
+	gw := &Gateway{metrics: metrics.New()}
 
 	originTimeout := opts.OriginTimeout
 	if originTimeout <= 0 {
@@ -79,7 +81,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		unhealthyCooldown = DefaultUnhealthyCooldown
 	}
 
-	mux, err := buildMux(cfg, originTimeout, maxBodyBytes, unhealthyCooldown)
+	mux, err := buildMux(cfg, originTimeout, maxBodyBytes, unhealthyCooldown, gw.metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +93,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	}
 
 	watcher := config.NewWatcher(configPath, interval, func(newCfg *config.Config) error {
-		newMux, err := buildMux(newCfg, originTimeout, maxBodyBytes, unhealthyCooldown)
+		newMux, err := buildMux(newCfg, originTimeout, maxBodyBytes, unhealthyCooldown, gw.metrics)
 		if err != nil {
 			return err
 		}
@@ -118,11 +120,15 @@ func (g *Gateway) Close() {
 	}
 }
 
+func (g *Gateway) MetricsHandler() http.Handler {
+	return g.metrics.Handler()
+}
+
 // buildMux compiles cfg into a *http.ServeMux, wiring each service's
 // plugins (in declared order) in front of its reverse proxy. A global
 // request_size_limiting plugin is prepended for every service so
 // maxBodyBytes applies even when a service doesn't configure its own.
-func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int64, unhealthyCooldown time.Duration) (*http.ServeMux, error) {
+func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int64, unhealthyCooldown time.Duration, recorder *metrics.Recorder) (*http.ServeMux, error) {
 	return router.Build(cfg, func(svc config.Service) (http.Handler, error) {
 		plugins := make([]plugin.Plugin, 0, len(svc.Plugins)+1)
 		plugins = append(plugins, plugin.NewRequestSizeLimiting(maxBodyBytes))
@@ -143,6 +149,6 @@ func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int6
 			return nil, err
 		}
 
-		return plugin.Chain(plugins, rp), nil
+		return recorder.Wrap(svc.Name, plugin.Chain(plugins, rp)), nil
 	})
 }
