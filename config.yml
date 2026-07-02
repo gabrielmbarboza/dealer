@@ -1,16 +1,38 @@
 services:
-  - name: "service1"
+  - name: "catalog"
     path: "/catalog"
     origin_url: "http://0.0.0.0:3001"
-  - name: "service2"
-    path: "/checkout"
+    methods: ["GET", "POST"]
+    plugins:
+      - name: http_log
+      - name: add_header
+        config:
+          headers:
+            X-Gateway: "dealer"
+            X-Gateway-Service: "catalog"
+      - name: request_size_limiting
+        config:
+          max_bytes: 1048576
+
+  - name: "payments"
+    path: "/payments"
     origin_url: "http://0.0.0.0:3002"
-    methods:
-      - "GET"
-  - name: "service3"
-    path: "/sales"
+    methods: ["POST"]
+    plugins:
+      - name: http_log
+      - name: jwt_auth
+        config:
+          secret_env: JWT_SECRET
+      - name: request_size_limiting
+        config:
+          max_bytes: 65536
+
+  - name: "orders"
+    path: "/orders/{id}"
     origin_url: "http://0.0.0.0:3003"
-    methods:
-      - "GET"
-      - "POST"
-      - "PUT"
+    methods: ["GET", "PUT"]
+    plugins:
+      - name: http_log
+      - name: jwt_auth
+        config:
+          secret_env: JWT_SECRET
