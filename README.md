@@ -77,6 +77,8 @@ Environment variables:
 
 - `DEALER_CONFIG_PATH` — path to the config file (default: `config.yml`).
 - `DEALER_CONFIG_POLL_INTERVAL` — how often the config file is checked for changes, as a Go duration (e.g. `2s`, default: `2s`).
+- `DEALER_ORIGIN_TIMEOUT` — how long to wait when dialing/reading response headers from an internal service before failing with a 502, as a Go duration (default: `10s`).
+- `DEALER_MAX_BODY_BYTES` — default request body size cap (in bytes) applied to every service, even ones without their own `request_size_limiting` plugin (default: `10485760`, i.e. 10 MiB).
 - Any variable referenced by a `jwt_auth` plugin's `secret_env` (e.g. `JWT_SECRET`) must be set for that plugin to validate tokens.
 
 Example request, assuming a service is configured as above and a valid JWT is available:

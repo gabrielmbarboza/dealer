@@ -1,14 +1,29 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
 	dealer "github.com/gabrielmbarboza/dealer/config"
 	"github.com/gabrielmbarboza/dealer/gateway"
+)
+
+// http.Server timeouts - guard against slow/hanging clients (e.g.
+// Slowloris-style attacks) tying up connections indefinitely.
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 15 * time.Second
+	writeTimeout      = 15 * time.Second
+	idleTimeout       = 60 * time.Second
+	shutdownTimeout   = 10 * time.Second
 )
 
 func main() {
@@ -23,7 +38,29 @@ func main() {
 		pollInterval = d
 	}
 
-	gw, err := gateway.New(configPath, gateway.Options{PollInterval: pollInterval})
+	originTimeout := gateway.DefaultOriginTimeout
+	if raw := os.Getenv("DEALER_ORIGIN_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			log.Fatalf("main: invalid DEALER_ORIGIN_TIMEOUT %q: %v", raw, err)
+		}
+		originTimeout = d
+	}
+
+	maxBodyBytes := gateway.DefaultMaxRequestBodyBytes
+	if raw := os.Getenv("DEALER_MAX_BODY_BYTES"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			log.Fatalf("main: invalid DEALER_MAX_BODY_BYTES %q: %v", raw, err)
+		}
+		maxBodyBytes = n
+	}
+
+	gw, err := gateway.New(configPath, gateway.Options{
+		PollInterval:        pollInterval,
+		OriginTimeout:       originTimeout,
+		MaxRequestBodyBytes: maxBodyBytes,
+	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
@@ -33,7 +70,36 @@ func main() {
 	mux.HandleFunc("GET /{$}", infoHandler)
 	mux.Handle("/", gw)
 
-	log.Fatal(http.ListenAndServe("0.0.0.0:3000", mux))
+	srv := &http.Server{
+		Addr:              "0.0.0.0:3000",
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("main: server error: %v", err)
+		}
+	case <-ctx.Done():
+		log.Println("main: shutting down gracefully")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Fatalf("main: graceful shutdown failed: %v", err)
+		}
+	}
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
