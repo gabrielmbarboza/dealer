@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+// maxIdleConnsPerHost bounds the per-origin idle connection pool. Go's
+// zero-value default (DefaultMaxIdleConnsPerHost = 2) is too small for a
+// gateway: any concurrency above 2 in-flight requests to the same origin
+// forces the transport to tear down and re-dial connections instead of
+// reusing them.
+const maxIdleConnsPerHost = 100
+
 // NewReverseProxy builds a reverse proxy that forwards requests to
 // originURL, keeping the request path unstripped (e.g. a request to
 // /payments on the gateway reaches originURL + /payments on the origin).
@@ -36,6 +43,7 @@ func NewReverseProxy(name, originURL string, timeout time.Duration) (*httputil.R
 			Timeout: timeout,
 		}).DialContext,
 		ResponseHeaderTimeout: timeout,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
 	}
 
 	originalDirector := rp.Director

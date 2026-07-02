@@ -3,9 +3,12 @@ package proxy
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -155,5 +158,94 @@ func TestNewReverseProxy_SlowOriginTimesOutWithBadGateway(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("request took %v, want it to fail fast around the %v timeout", elapsed, testTimeout)
+	}
+}
+
+// countingListener counts every accepted TCP connection, regardless of how
+// many HTTP requests get multiplexed over it via keep-alive.
+type countingListener struct {
+	net.Listener
+	accepts *int32
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		atomic.AddInt32(l.accepts, 1)
+	}
+	return c, err
+}
+
+// TestNewReverseProxy_ReusesConnectionsToOrigin guards against the origin
+// Transport falling back to Go's DefaultMaxIdleConnsPerHost (2): under any
+// real concurrency that default forces the pool to tear down and re-dial
+// almost every connection, which is invisible in functional tests but shows
+// up as connection churn (and, over a real network, latency) under load.
+func TestNewReverseProxy_ReusesConnectionsToOrigin(t *testing.T) {
+	const concurrency = 8
+	const waves = 5
+
+	var accepts int32
+	arrived := make(chan struct{}, concurrency)
+	var release atomic.Value // chan struct{}
+	release.Store(make(chan struct{}))
+
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		<-release.Load().(chan struct{})
+		w.WriteHeader(http.StatusOK)
+	}))
+	origin.Listener = &countingListener{Listener: origin.Listener, accepts: &accepts}
+	origin.Start()
+	defer origin.Close()
+
+	rp, err := NewReverseProxy("catalog", origin.URL, testTimeout)
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	gatewayServer := httptest.NewServer(rp)
+	defer gatewayServer.Close()
+
+	client := gatewayServer.Client()
+
+	for w := 0; w < waves; w++ {
+		wave := make(chan struct{})
+		release.Store(wave)
+
+		var wg sync.WaitGroup
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				resp, err := client.Get(gatewayServer.URL + "/catalog")
+				if err != nil {
+					t.Errorf("Get() error = %v", err)
+					return
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}()
+		}
+
+		// Wait until all `concurrency` requests are simultaneously
+		// in-flight at the origin before releasing them, forcing the
+		// transport to hold that many connections open at once.
+		for i := 0; i < concurrency; i++ {
+			<-arrived
+		}
+		close(wave)
+		wg.Wait()
+	}
+
+	got := atomic.LoadInt32(&accepts)
+	// A pooled transport dials ~concurrency connections once and reuses
+	// them across waves. The buggy default (MaxIdleConnsPerHost=2) closes
+	// almost all of them after every wave, so accepts would climb toward
+	// concurrency*waves instead.
+	want := int32(concurrency + 2) // small slack for pool warm-up
+	if got > want {
+		t.Fatalf("origin accepted %d TCP connections for %d requests (%d waves x %d concurrent), want <= %d - connections are being re-dialed instead of pooled",
+			got, concurrency*waves, waves, concurrency, want)
 	}
 }
