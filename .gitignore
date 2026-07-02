@@ -22,3 +22,6 @@
 # `go build ./cmd/dealer` (no -o) output binary
 /dealer
 /cmd/dealer/dealer
+
+# Load test run artifacts (binaries, logs, vegeta result files)
+/loadtest/results/
