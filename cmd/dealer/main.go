@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux, served only by the opt-in debug server
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -58,6 +59,12 @@ func main() {
 	}
 
 	debugSrv := newDebugServer(os.Getenv("DEALER_DEBUG_ADDR"))
+	if debugSrv != nil {
+		// Both are 0 (disabled) unless a debug server was requested, so
+		// this has no cost on the default/production path.
+		runtime.SetMutexProfileFraction(1)
+		runtime.SetBlockProfileRate(1)
+	}
 
 	gw, err := gateway.New(configPath, gateway.Options{
 		PollInterval:        pollInterval,
