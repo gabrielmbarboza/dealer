@@ -13,8 +13,10 @@ RUN go build -ldflags "-X github.com/gabrielmbarboza/dealer/config.Version=${VER
 FROM alpine:3.24.1
 ARG VERSION
 RUN apk --no-cache add ca-certificates
+RUN addgroup -S dealer && adduser -S -G dealer dealer
 COPY --from=builder /go/bin/app /app
 COPY --from=builder /go/src/app/config.yml /config.yml
+USER dealer
 ENTRYPOINT /app
 LABEL Name=dealer Version=${VERSION}
 EXPOSE 3000
