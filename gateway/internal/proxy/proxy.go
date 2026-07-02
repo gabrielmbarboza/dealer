@@ -1,0 +1,48 @@
+// Package proxy builds per-service reverse proxies that forward requests to
+// internal origin services, preserving the incoming method, path, headers
+// and body unchanged.
+package proxy
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+)
+
+// NewReverseProxy builds a reverse proxy that forwards requests to
+// originURL, keeping the request path unstripped (e.g. a request to
+// /payments on the gateway reaches originURL + /payments on the origin).
+// name is only used to identify the service in error responses/logs.
+func NewReverseProxy(name, originURL string) (*httputil.ReverseProxy, error) {
+	target, err := url.Parse(originURL)
+	if err != nil {
+		return nil, fmt.Errorf("proxy: invalid origin_url %q: %w", originURL, err)
+	}
+	if target.Scheme == "" || target.Host == "" {
+		return nil, fmt.Errorf("proxy: invalid origin_url %q: missing scheme or host", originURL)
+	}
+
+	rp := httputil.NewSingleHostReverseProxy(target)
+
+	originalDirector := rp.Director
+	rp.Director = func(r *http.Request) {
+		userAgent := r.Header.Get("User-Agent")
+		originalDirector(r)
+		r.Header.Set("User-Agent", userAgent)
+	}
+
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("proxy: service %q origin %s: %v", name, originURL, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "bad_gateway",
+			"service": name,
+		})
+	}
+
+	return rp, nil
+}
