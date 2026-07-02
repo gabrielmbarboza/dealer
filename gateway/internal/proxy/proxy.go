@@ -38,10 +38,12 @@ func NewReverseProxy(name, originURL string) (*httputil.ReverseProxy, error) {
 		log.Printf("proxy: service %q origin %s: %v", name, originURL, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{
+		if encErr := json.NewEncoder(w).Encode(map[string]string{
 			"error":   "bad_gateway",
 			"service": name,
-		})
+		}); encErr != nil {
+			log.Printf("proxy: encode bad_gateway response: %v", encErr)
+		}
 	}
 
 	return rp, nil

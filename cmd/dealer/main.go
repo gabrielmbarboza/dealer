@@ -38,7 +38,9 @@ func main() {
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dealer.ProjectInfo())
+	if err := json.NewEncoder(w).Encode(dealer.ProjectInfo()); err != nil {
+		log.Printf("main: encode info response: %v", err)
+	}
 }
 
 func envOr(key, fallback string) string {
