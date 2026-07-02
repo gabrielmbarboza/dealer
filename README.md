@@ -7,7 +7,8 @@
 - [About](#about)
 - [Getting Started](#getting_started)
 - [Usage](#usage)
-- [Contributing](../CONTRIBUTING.md)
+- [Contributing](CONTRIBUTING.md)
+- [License](#license)
 
 ## About <a name = "about"></a>
 
@@ -26,7 +27,7 @@ These instructions will get you a copy of the project up and running on your loc
 
 ### Prerequisites
 
-- [Go](https://go.dev/dl/) 1.26 or later (the workspace's `go.mod`/`go.work` files declare `go 1.26.4`; with `GOTOOLCHAIN=auto`, the `go` command downloads it automatically if you have an older version installed).
+- [Go](https://go.dev/dl/) 1.25.11 or later (the workspace's `go.mod`/`go.work` files declare `go 1.25.11`; with `GOTOOLCHAIN=auto`, the `go` command downloads it automatically if you have an older version installed).
 - Or [Docker](https://docs.docker.com/get-docker/), if you'd rather not install Go locally.
 
 ### Installing
@@ -44,13 +45,14 @@ Run it directly with Go (uses the Go workspace defined in `go.work`):
 go run ./cmd/dealer
 ```
 
-Or build and run the container with Docker Compose:
+Or build and run the container with Docker Compose (copy `.env.example` to `.env` first and set `JWT_SECRET`, required by `config.yml`'s `jwt_auth` plugins):
 
 ```
+cp .env.example .env
 docker compose up --build
 ```
 
-The gateway listens on `0.0.0.0:3000` and reads `config.yml` from the current directory by default.
+The gateway listens on `0.0.0.0:3000` and reads `config.yml` from the current directory by default. Under Docker Compose, the project directory is bind-mounted read-only, so editing `config.yml` on the host is picked up by hot-reload without rebuilding the image.
 
 ## Usage <a name = "usage"></a>
 
@@ -85,3 +87,7 @@ curl -X POST http://localhost:3000/payments \
   -H "Content-Type: application/json" \
   -d '{"amount": 100}'
 ```
+
+## License <a name = "license"></a>
+
+This project is licensed under the [MIT License](LICENSE).

@@ -18,3 +18,7 @@
 
 # Local secrets for docker compose (see .env.example)
 .env
+
+# `go build ./cmd/dealer` (no -o) output binary
+/dealer
+/cmd/dealer/dealer
