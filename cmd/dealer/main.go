@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux, served only by the opt-in debug server
 	"os"
 	"os/signal"
 	"strconv"
@@ -56,6 +57,8 @@ func main() {
 		maxBodyBytes = n
 	}
 
+	debugSrv := newDebugServer(os.Getenv("DEALER_DEBUG_ADDR"))
+
 	gw, err := gateway.New(configPath, gateway.Options{
 		PollInterval:        pollInterval,
 		OriginTimeout:       originTimeout,
@@ -87,6 +90,15 @@ func main() {
 		serveErr <- srv.ListenAndServe()
 	}()
 
+	if debugSrv != nil {
+		go func() {
+			log.Printf("main: debug/pprof server listening on %s", debugSrv.Addr)
+			if err := debugSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("main: debug server error: %v", err)
+			}
+		}()
+	}
+
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -96,9 +108,27 @@ func main() {
 		log.Println("main: shutting down gracefully")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+		if debugSrv != nil {
+			_ = debugSrv.Shutdown(shutdownCtx)
+		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Fatalf("main: graceful shutdown failed: %v", err)
 		}
+	}
+}
+
+// newDebugServer returns an *http.Server exposing net/http/pprof on addr,
+// or nil if addr is empty. Profiling is opt-in (via DEALER_DEBUG_ADDR) and
+// served on its own listener - separate from the public gateway mux - so
+// operators can bind it to localhost/an internal interface instead of
+// exposing profiling data on the public port.
+func newDebugServer(addr string) *http.Server {
+	if addr == "" {
+		return nil
+	}
+	return &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 }
 
