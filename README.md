@@ -74,12 +74,25 @@ services:
 
 Routes may include a path parameter, e.g. `path: "/orders/{id}"`, which matches any value in that segment.
 
+A service can forward to more than one origin with `origin_urls` instead of `origin_url`. Requests are round-robined across them, and an origin that just failed is skipped for a cooldown period rather than being retried immediately:
+
+```yaml
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls:
+      - "http://0.0.0.0:3001"
+      - "http://0.0.0.0:3004"
+    methods: ["GET"]
+```
+
 Environment variables:
 
 - `DEALER_CONFIG_PATH` — path to the config file (default: `config.yml`).
 - `DEALER_CONFIG_POLL_INTERVAL` — how often the config file is checked for changes, as a Go duration (e.g. `2s`, default: `2s`).
 - `DEALER_ORIGIN_TIMEOUT` — how long to wait when dialing/reading response headers from an internal service before failing with a 502, as a Go duration (default: `10s`).
 - `DEALER_MAX_BODY_BYTES` — default request body size cap (in bytes) applied to every service, even ones without their own `request_size_limiting` plugin (default: `10485760`, i.e. 10 MiB).
+- `DEALER_UNHEALTHY_COOLDOWN` — for services using `origin_urls`, how long an origin is skipped after a failed request before being retried, as a Go duration (default: `10s`).
 - `DEALER_DEBUG_ADDR` — if set, starts a `net/http/pprof` server on this address (e.g. `127.0.0.1:6060`), separate from the public gateway port. Disabled by default; bind it to a local/internal interface only.
 - Any variable referenced by a `jwt_auth` plugin's `secret_env` (e.g. `JWT_SECRET`) must be set for that plugin to validate tokens.
 

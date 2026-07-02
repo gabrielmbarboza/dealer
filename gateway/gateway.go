@@ -25,6 +25,8 @@ const DefaultOriginTimeout = 10 * time.Second
 // not set.
 const DefaultMaxRequestBodyBytes int64 = 10 << 20 // 10 MiB
 
+const DefaultUnhealthyCooldown = 10 * time.Second
+
 // Options configures a Gateway.
 type Options struct {
 	// PollInterval controls how often the config file is checked for
@@ -43,6 +45,8 @@ type Options struct {
 	// to. A service's own plugin can still enforce a stricter limit.
 	// Defaults to DefaultMaxRequestBodyBytes when zero.
 	MaxRequestBodyBytes int64
+
+	UnhealthyCooldown time.Duration
 }
 
 // Gateway is an http.Handler that forwards requests to internal services
@@ -70,8 +74,12 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = DefaultMaxRequestBodyBytes
 	}
+	unhealthyCooldown := opts.UnhealthyCooldown
+	if unhealthyCooldown <= 0 {
+		unhealthyCooldown = DefaultUnhealthyCooldown
+	}
 
-	mux, err := buildMux(cfg, originTimeout, maxBodyBytes)
+	mux, err := buildMux(cfg, originTimeout, maxBodyBytes, unhealthyCooldown)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +91,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	}
 
 	watcher := config.NewWatcher(configPath, interval, func(newCfg *config.Config) error {
-		newMux, err := buildMux(newCfg, originTimeout, maxBodyBytes)
+		newMux, err := buildMux(newCfg, originTimeout, maxBodyBytes, unhealthyCooldown)
 		if err != nil {
 			return err
 		}
@@ -114,7 +122,7 @@ func (g *Gateway) Close() {
 // plugins (in declared order) in front of its reverse proxy. A global
 // request_size_limiting plugin is prepended for every service so
 // maxBodyBytes applies even when a service doesn't configure its own.
-func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int64) (*http.ServeMux, error) {
+func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int64, unhealthyCooldown time.Duration) (*http.ServeMux, error) {
 	return router.Build(cfg, func(svc config.Service) (http.Handler, error) {
 		plugins := make([]plugin.Plugin, 0, len(svc.Plugins)+1)
 		plugins = append(plugins, plugin.NewRequestSizeLimiting(maxBodyBytes))
@@ -126,7 +134,11 @@ func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int6
 			plugins = append(plugins, p)
 		}
 
-		rp, err := proxy.NewReverseProxy(svc.Name, svc.OriginURL, originTimeout)
+		origins := svc.OriginURLs
+		if len(origins) == 0 {
+			origins = []string{svc.OriginURL}
+		}
+		rp, err := proxy.NewOriginProxy(svc.Name, origins, originTimeout, unhealthyCooldown)
 		if err != nil {
 			return nil, err
 		}

@@ -110,6 +110,48 @@ services:
 	}
 }
 
+func TestParse_OriginURLsOnlyParsesFine(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls: ["http://0.0.0.0:3001", "http://0.0.0.0:3004"]
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	got := cfg.Services[0].OriginURLs
+	want := []string{"http://0.0.0.0:3001", "http://0.0.0.0:3004"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("OriginURLs = %v, want %v", got, want)
+	}
+}
+
+func TestParse_OriginURLAndOriginURLsBothSetErrors(t *testing.T) {
+	_, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
+    origin_urls: ["http://0.0.0.0:3004"]
+`))
+	if err == nil {
+		t.Fatal("Parse() error = nil, want non-nil when both origin_url and origin_urls are set")
+	}
+}
+
+func TestParse_OriginURLsWithEmptyEntryErrors(t *testing.T) {
+	_, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls: ["http://0.0.0.0:3001", ""]
+`))
+	if err == nil {
+		t.Fatal("Parse() error = nil, want non-nil when origin_urls contains an empty entry")
+	}
+}
+
 func TestParse_InvalidYAMLErrors(t *testing.T) {
 	if _, err := Parse([]byte("not: [valid: yaml")); err == nil {
 		t.Fatal("Parse() error = nil, want non-nil for malformed yaml")

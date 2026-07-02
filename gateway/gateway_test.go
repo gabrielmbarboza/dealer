@@ -300,6 +300,84 @@ services:
 	}
 }
 
+func TestGateway_LoadBalancesAcrossMultipleOrigins(t *testing.T) {
+	originA := newEchoOrigin(t, "A", nil)
+	originB := newEchoOrigin(t, "B", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls: [%q, %q]
+`, originA.URL, originB.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	seen := map[string]int{}
+	for i := 0; i < 4; i++ {
+		resp, err := http.Get(server.URL + "/catalog")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		seen[resp.Header.Get("X-Origin")]++
+		resp.Body.Close()
+	}
+
+	if seen["A"] != 2 || seen["B"] != 2 {
+		t.Fatalf("distribution = %v, want 2 requests to each of A and B", seen)
+	}
+}
+
+func TestGateway_KeepsServingFromHealthyOriginWhenOneIsDown(t *testing.T) {
+	healthy := newEchoOrigin(t, "healthy", nil)
+
+	down := newEchoOrigin(t, "down", nil)
+	downURL := down.URL
+	down.Close()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls: [%q, %q]
+`, downURL, healthy.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, UnhealthyCooldown: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	for i := 0; i < 3; i++ {
+		if _, err := http.Get(server.URL + "/catalog"); err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+	}
+
+	waitUntil(t, func() bool {
+		resp, err := http.Get(server.URL + "/catalog")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode == http.StatusOK && resp.Header.Get("X-Origin") == "healthy"
+	})
+}
+
 func TestGateway_OriginTimeoutReturnsBadGatewayForSlowOrigin(t *testing.T) {
 	unblock := make(chan struct{})
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

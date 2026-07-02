@@ -21,8 +21,16 @@ func Parse(data []byte) (*Config, error) {
 		if svc.Path == "" {
 			return nil, fmt.Errorf("config: service %q: path is required", svc.Name)
 		}
-		if svc.OriginURL == "" {
-			return nil, fmt.Errorf("config: service %q: origin_url is required", svc.Name)
+		if svc.OriginURL == "" && len(svc.OriginURLs) == 0 {
+			return nil, fmt.Errorf("config: service %q: origin_url or origin_urls is required", svc.Name)
+		}
+		if svc.OriginURL != "" && len(svc.OriginURLs) > 0 {
+			return nil, fmt.Errorf("config: service %q: origin_url and origin_urls are mutually exclusive", svc.Name)
+		}
+		for _, u := range svc.OriginURLs {
+			if u == "" {
+				return nil, fmt.Errorf("config: service %q: origin_urls entries must not be empty", svc.Name)
+			}
 		}
 	}
 

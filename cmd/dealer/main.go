@@ -58,6 +58,15 @@ func main() {
 		maxBodyBytes = n
 	}
 
+	unhealthyCooldown := gateway.DefaultUnhealthyCooldown
+	if raw := os.Getenv("DEALER_UNHEALTHY_COOLDOWN"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			log.Fatalf("main: invalid DEALER_UNHEALTHY_COOLDOWN %q: %v", raw, err)
+		}
+		unhealthyCooldown = d
+	}
+
 	debugSrv := newDebugServer(os.Getenv("DEALER_DEBUG_ADDR"))
 	if debugSrv != nil {
 		// Both are 0 (disabled) unless a debug server was requested, so
@@ -70,6 +79,7 @@ func main() {
 		PollInterval:        pollInterval,
 		OriginTimeout:       originTimeout,
 		MaxRequestBodyBytes: maxBodyBytes,
+		UnhealthyCooldown:   unhealthyCooldown,
 	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
