@@ -1,6 +1,7 @@
-go 1.22.0
+go 1.26.4
 
 use (
     ./cmd/dealer
     ./config
+    ./gateway
 )
