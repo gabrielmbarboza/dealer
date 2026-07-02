@@ -99,3 +99,27 @@ func TestRequestSizeLimiting_Name(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", p.Name(), "request_size_limiting")
 	}
 }
+
+func TestNewRequestSizeLimiting_BuildsWorkingPlugin(t *testing.T) {
+	p := NewRequestSizeLimiting(10)
+	if p.Name() != "request_size_limiting" {
+		t.Fatalf("Name() = %q, want %q", p.Name(), "request_size_limiting")
+	}
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/catalog", strings.NewReader("this body is definitely over ten bytes"))
+	rec := httptest.NewRecorder()
+	p.Wrap(next).ServeHTTP(rec, req)
+
+	if called {
+		t.Fatal("next handler was called, want blocked")
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}

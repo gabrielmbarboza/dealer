@@ -7,16 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 )
 
 // NewReverseProxy builds a reverse proxy that forwards requests to
 // originURL, keeping the request path unstripped (e.g. a request to
 // /payments on the gateway reaches originURL + /payments on the origin).
 // name is only used to identify the service in error responses/logs.
-func NewReverseProxy(name, originURL string) (*httputil.ReverseProxy, error) {
+// timeout bounds both dialing the origin and waiting for its response
+// headers, so a hung or unreachable origin fails fast with a 502 instead of
+// tying up the gateway indefinitely.
+func NewReverseProxy(name, originURL string, timeout time.Duration) (*httputil.ReverseProxy, error) {
 	target, err := url.Parse(originURL)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: invalid origin_url %q: %w", originURL, err)
@@ -26,6 +31,12 @@ func NewReverseProxy(name, originURL string) (*httputil.ReverseProxy, error) {
 	}
 
 	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.Transport = &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: timeout,
+		}).DialContext,
+		ResponseHeaderTimeout: timeout,
+	}
 
 	originalDirector := rp.Director
 	rp.Director = func(r *http.Request) {

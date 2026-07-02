@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+const testTimeout = 200 * time.Millisecond
 
 type echoBody struct {
 	Method  string            `json:"method"`
@@ -37,7 +40,7 @@ func TestNewReverseProxy_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin()
 	defer origin.Close()
 
-	rp, err := NewReverseProxy("payments", origin.URL)
+	rp, err := NewReverseProxy("payments", origin.URL, testTimeout)
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}
@@ -86,7 +89,7 @@ func TestNewReverseProxy_OriginDownReturnsCustomBadGateway(t *testing.T) {
 	originURL := origin.URL
 	origin.Close() // origin is down before any request reaches it
 
-	rp, err := NewReverseProxy("payments", originURL)
+	rp, err := NewReverseProxy("payments", originURL, testTimeout)
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}
@@ -117,7 +120,40 @@ func TestNewReverseProxy_OriginDownReturnsCustomBadGateway(t *testing.T) {
 }
 
 func TestNewReverseProxy_InvalidOriginURLErrors(t *testing.T) {
-	if _, err := NewReverseProxy("broken", "://not-a-url"); err == nil {
+	if _, err := NewReverseProxy("broken", "://not-a-url", testTimeout); err == nil {
 		t.Fatal("NewReverseProxy() error = nil, want non-nil for invalid origin_url")
+	}
+}
+
+func TestNewReverseProxy_SlowOriginTimesOutWithBadGateway(t *testing.T) {
+	unblock := make(chan struct{})
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-unblock
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	defer close(unblock)
+
+	rp, err := NewReverseProxy("slow", origin.URL, testTimeout)
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	gatewayServer := httptest.NewServer(rp)
+	defer gatewayServer.Close()
+
+	start := time.Now()
+	resp, err := http.Get(gatewayServer.URL + "/slow")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("request took %v, want it to fail fast around the %v timeout", elapsed, testTimeout)
 	}
 }

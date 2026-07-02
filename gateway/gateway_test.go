@@ -263,3 +263,82 @@ services:
 		t.Fatalf("X-Origin = %q, want %q (previous valid config should still be serving)", resp.Header.Get("X-Origin"), "good")
 	}
 }
+
+func TestGateway_GlobalBodyLimitBlocksOversizedRequestWithoutPerServicePlugin(t *testing.T) {
+	var calls int32
+	origin := newEchoOrigin(t, "catalog", &calls)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, MaxRequestBodyBytes: 10})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	resp, err := http.Post(server.URL+"/catalog", "text/plain", strings.NewReader("this body is definitely over ten bytes"))
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("origin call count = %d, want 0 (oversized request should never reach it)", got)
+	}
+}
+
+func TestGateway_OriginTimeoutReturnsBadGatewayForSlowOrigin(t *testing.T) {
+	unblock := make(chan struct{})
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-unblock
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	defer close(unblock)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "slow"
+    path: "/slow"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, OriginTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	start := time.Now()
+	resp, err := http.Get(server.URL + "/slow")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("request took %v, want it to fail fast", elapsed)
+	}
+}

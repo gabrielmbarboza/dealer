@@ -26,6 +26,14 @@ func newRequestSizeLimiting(cfg map[string]any) (Plugin, error) {
 	return &requestSizeLimiting{maxBytes: maxBytes}, nil
 }
 
+// NewRequestSizeLimiting builds a request_size_limiting plugin directly from
+// a byte limit, bypassing yaml config parsing. Used by the gateway package
+// to apply a default body size cap to every service, regardless of whether
+// that service's own yaml config also declares this plugin.
+func NewRequestSizeLimiting(maxBytes int64) Plugin {
+	return &requestSizeLimiting{maxBytes: maxBytes}
+}
+
 func (p *requestSizeLimiting) Name() string { return "request_size_limiting" }
 
 func (p *requestSizeLimiting) Wrap(next http.Handler) http.Handler {

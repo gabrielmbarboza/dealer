@@ -18,11 +18,31 @@ import (
 // DefaultPollInterval is used when Options.PollInterval is not set.
 const DefaultPollInterval = 2 * time.Second
 
+// DefaultOriginTimeout is used when Options.OriginTimeout is not set.
+const DefaultOriginTimeout = 10 * time.Second
+
+// DefaultMaxRequestBodyBytes is used when Options.MaxRequestBodyBytes is
+// not set.
+const DefaultMaxRequestBodyBytes int64 = 10 << 20 // 10 MiB
+
 // Options configures a Gateway.
 type Options struct {
 	// PollInterval controls how often the config file is checked for
 	// changes. Defaults to DefaultPollInterval when zero.
 	PollInterval time.Duration
+
+	// OriginTimeout bounds dialing an internal service and waiting for its
+	// response headers, so a hung or unreachable origin fails fast instead
+	// of tying up the gateway indefinitely. Defaults to DefaultOriginTimeout
+	// when zero.
+	OriginTimeout time.Duration
+
+	// MaxRequestBodyBytes caps the request body size for every service,
+	// regardless of whether that service configures its own
+	// request_size_limiting plugin - a safety net for services that forget
+	// to. A service's own plugin can still enforce a stricter limit.
+	// Defaults to DefaultMaxRequestBodyBytes when zero.
+	MaxRequestBodyBytes int64
 }
 
 // Gateway is an http.Handler that forwards requests to internal services
@@ -42,7 +62,16 @@ func New(configPath string, opts Options) (*Gateway, error) {
 
 	gw := &Gateway{}
 
-	mux, err := buildMux(cfg)
+	originTimeout := opts.OriginTimeout
+	if originTimeout <= 0 {
+		originTimeout = DefaultOriginTimeout
+	}
+	maxBodyBytes := opts.MaxRequestBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = DefaultMaxRequestBodyBytes
+	}
+
+	mux, err := buildMux(cfg, originTimeout, maxBodyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +83,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	}
 
 	watcher := config.NewWatcher(configPath, interval, func(newCfg *config.Config) error {
-		newMux, err := buildMux(newCfg)
+		newMux, err := buildMux(newCfg, originTimeout, maxBodyBytes)
 		if err != nil {
 			return err
 		}
@@ -82,10 +111,13 @@ func (g *Gateway) Close() {
 }
 
 // buildMux compiles cfg into a *http.ServeMux, wiring each service's
-// plugins (in declared order) in front of its reverse proxy.
-func buildMux(cfg *config.Config) (*http.ServeMux, error) {
+// plugins (in declared order) in front of its reverse proxy. A global
+// request_size_limiting plugin is prepended for every service so
+// maxBodyBytes applies even when a service doesn't configure its own.
+func buildMux(cfg *config.Config, originTimeout time.Duration, maxBodyBytes int64) (*http.ServeMux, error) {
 	return router.Build(cfg, func(svc config.Service) (http.Handler, error) {
-		plugins := make([]plugin.Plugin, 0, len(svc.Plugins))
+		plugins := make([]plugin.Plugin, 0, len(svc.Plugins)+1)
+		plugins = append(plugins, plugin.NewRequestSizeLimiting(maxBodyBytes))
 		for _, pc := range svc.Plugins {
 			p, err := plugin.Build(pc.Name, pc.Config)
 			if err != nil {
@@ -94,7 +126,7 @@ func buildMux(cfg *config.Config) (*http.ServeMux, error) {
 			plugins = append(plugins, p)
 		}
 
-		rp, err := proxy.NewReverseProxy(svc.Name, svc.OriginURL)
+		rp, err := proxy.NewReverseProxy(svc.Name, svc.OriginURL, originTimeout)
 		if err != nil {
 			return nil, err
 		}
