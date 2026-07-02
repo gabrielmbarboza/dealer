@@ -1,5 +1,3 @@
-version: '3.4'
-
 services:
   dealer:
     image: dealer
@@ -8,3 +6,12 @@ services:
       dockerfile: ./Dockerfile
     ports:
       - 3000:3000
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your environment or a .env file, see .env.example}
+      - DEALER_CONFIG_POLL_INTERVAL=${DEALER_CONFIG_POLL_INTERVAL:-2s}
+      - DEALER_CONFIG_PATH=/workspace/config.yml
+    volumes:
+      # Bind-mounting the containing directory (rather than config.yml
+      # directly) so hot-reload keeps working when an editor/tool saves the
+      # file via rename - a single-file bind mount goes stale in that case.
+      - .:/workspace:ro

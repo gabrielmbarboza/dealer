@@ -15,3 +15,6 @@
 *.out
 
 .serena
+
+# Local secrets for docker compose (see .env.example)
+.env
