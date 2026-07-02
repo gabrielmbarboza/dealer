@@ -20,6 +20,7 @@ Dealer reads a `config.yml` file describing your internal services and forwards 
 - `http_log` — logs every request that hits the gateway.
 - `request_size_limiting` — blocks requests whose body exceeds a configured size.
 - `jwt_auth` — blocks requests without a valid JWT (accepted via header or query string).
+- `rate_limiting` — blocks requests once a client IP exceeds a configured requests-per-second rate, allowing short bursts.
 
 ## Getting Started  <a name = "getting_started"></a>
 

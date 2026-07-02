@@ -26,3 +26,13 @@ func TestBuild_PropagatesFactoryError(t *testing.T) {
 		t.Fatal("Build() error = nil, want non-nil when required config is missing")
 	}
 }
+
+func TestBuild_RateLimiting(t *testing.T) {
+	p, err := Build("rate_limiting", map[string]any{"requests_per_second": 5})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v", "rate_limiting", err)
+	}
+	if p.Name() != "rate_limiting" {
+		t.Fatalf("Build(%q).Name() = %q", "rate_limiting", p.Name())
+	}
+}

@@ -7,6 +7,7 @@ var builtins = map[string]Factory{
 	"http_log":              newHTTPLog,
 	"request_size_limiting": newRequestSizeLimiting,
 	"jwt_auth":              newJWTAuth,
+	"rate_limiting":         newRateLimiting,
 }
 
 // Build constructs the named built-in plugin from its yaml config map.

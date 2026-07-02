@@ -13,6 +13,10 @@ services:
       - name: request_size_limiting
         config:
           max_bytes: 1048576
+      - name: rate_limiting
+        config:
+          requests_per_second: 5
+          burst: 10
 
   - name: "payments"
     path: "/payments"
