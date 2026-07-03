@@ -1,4 +1,4 @@
-# Dealer
+# Dealer API Gateway
 
 ![alt text](https://github.com/gabrielmbarboza/dealer/blob/main/assets/images/dealer_logo.jpg?raw=true)
 
