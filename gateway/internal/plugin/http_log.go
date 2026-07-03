@@ -53,16 +53,20 @@ func (p *httpLog) Wrap(next http.Handler) http.Handler {
 func (p *httpLog) log(method, path, requestID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.writer.WriteString(time.Now().Format("2006/01/02 15:04:05"))
-	p.writer.WriteByte(' ')
-	p.writer.WriteString(method)
-	p.writer.WriteByte(' ')
-	p.writer.WriteString(path)
+	// bufio.Writer only errors here if a prior implicit flush (buffer
+	// full) failed writing to the underlying writer; nothing this plugin
+	// can usefully react to per line, so errors are explicitly ignored
+	// rather than left unchecked.
+	_, _ = p.writer.WriteString(time.Now().Format("2006/01/02 15:04:05"))
+	_ = p.writer.WriteByte(' ')
+	_, _ = p.writer.WriteString(method)
+	_ = p.writer.WriteByte(' ')
+	_, _ = p.writer.WriteString(path)
 	if requestID != "" {
-		p.writer.WriteString(" request_id=")
-		p.writer.WriteString(requestID)
+		_, _ = p.writer.WriteString(" request_id=")
+		_, _ = p.writer.WriteString(requestID)
 	}
-	p.writer.WriteByte('\n')
+	_ = p.writer.WriteByte('\n')
 }
 
 // flush forces any buffered log lines out to the underlying writer.

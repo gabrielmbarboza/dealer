@@ -44,7 +44,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var bodyBytes []byte
 	if req.Body != nil {
 		b, err := io.ReadAll(req.Body)
-		req.Body.Close()
+		_ = req.Body.Close()
 		if err != nil {
 			return nil, err
 		}
