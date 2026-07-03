@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/gabrielmbarboza/dealer/gateway/internal/tracing"
 )
 
 // httpLog writes "<timestamp> METHOD path" lines for every request.
@@ -43,12 +45,12 @@ func (p *httpLog) Name() string { return "http_log" }
 
 func (p *httpLog) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p.log(r.Method, r.URL.Path)
+		p.log(r.Method, r.URL.Path, tracing.FromContext(r.Context()))
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (p *httpLog) log(method, path string) {
+func (p *httpLog) log(method, path, requestID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.writer.WriteString(time.Now().Format("2006/01/02 15:04:05"))
@@ -56,6 +58,10 @@ func (p *httpLog) log(method, path string) {
 	p.writer.WriteString(method)
 	p.writer.WriteByte(' ')
 	p.writer.WriteString(path)
+	if requestID != "" {
+		p.writer.WriteString(" request_id=")
+		p.writer.WriteString(requestID)
+	}
 	p.writer.WriteByte('\n')
 }
 

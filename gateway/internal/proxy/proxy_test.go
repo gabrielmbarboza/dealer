@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 const testTimeout = 200 * time.Millisecond
@@ -43,7 +46,7 @@ func TestNewReverseProxy_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin()
 	defer origin.Close()
 
-	rp, err := NewReverseProxy("payments", origin.URL, testTimeout)
+	rp, err := NewReverseProxy("payments", origin.URL, testTimeout, RetryOptions{})
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}
@@ -92,7 +95,7 @@ func TestNewReverseProxy_OriginDownReturnsCustomBadGateway(t *testing.T) {
 	originURL := origin.URL
 	origin.Close() // origin is down before any request reaches it
 
-	rp, err := NewReverseProxy("payments", originURL, testTimeout)
+	rp, err := NewReverseProxy("payments", originURL, testTimeout, RetryOptions{})
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}
@@ -122,9 +125,131 @@ func TestNewReverseProxy_OriginDownReturnsCustomBadGateway(t *testing.T) {
 	}
 }
 
+func TestNewReverseProxy_InjectsTraceparentWhenSpanActive(t *testing.T) {
+	var gotTraceparent string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceparent = r.Header.Get("traceparent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+
+	rp, err := NewReverseProxy("catalog", origin.URL, testTimeout, RetryOptions{})
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	tp := sdktrace.NewTracerProvider()
+	defer tp.Shutdown(context.Background())
+	ctx, span := tp.Tracer("test").Start(context.Background(), "test-span")
+	defer span.End()
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, req)
+
+	if gotTraceparent == "" {
+		t.Fatal("origin did not receive a traceparent header")
+	}
+	wantTraceID := span.SpanContext().TraceID().String()
+	if !strings.Contains(gotTraceparent, wantTraceID) {
+		t.Fatalf("traceparent = %q, want it to contain trace id %q", gotTraceparent, wantTraceID)
+	}
+}
+
+func TestNewReverseProxy_NoTraceparentWhenNoActiveSpan(t *testing.T) {
+	var gotTraceparent string
+	seen := false
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceparent = r.Header.Get("traceparent")
+		seen = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+
+	rp, err := NewReverseProxy("catalog", origin.URL, testTimeout, RetryOptions{})
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, req)
+
+	if !seen {
+		t.Fatal("origin was never reached")
+	}
+	if gotTraceparent != "" {
+		t.Fatalf("traceparent = %q, want empty when no span is active", gotTraceparent)
+	}
+}
+
 func TestNewReverseProxy_InvalidOriginURLErrors(t *testing.T) {
-	if _, err := NewReverseProxy("broken", "://not-a-url", testTimeout); err == nil {
+	if _, err := NewReverseProxy("broken", "://not-a-url", testTimeout, RetryOptions{}); err == nil {
 		t.Fatal("NewReverseProxy() error = nil, want non-nil for invalid origin_url")
+	}
+}
+
+func TestNewReverseProxy_NoRetryByDefaultFailsFastOnDeadOrigin(t *testing.T) {
+	origin := newEchoOrigin()
+	originURL := origin.URL
+	origin.Close()
+
+	rp, err := NewReverseProxy("payments", originURL, testTimeout, RetryOptions{})
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	gatewayServer := httptest.NewServer(rp)
+	defer gatewayServer.Close()
+
+	start := time.Now()
+	resp, err := http.Get(gatewayServer.URL + "/payments")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("request took %v, want a single fast attempt with no retry configured", elapsed)
+	}
+}
+
+func TestNewReverseProxy_RetriesTransientDialFailuresBeforeGivingUp(t *testing.T) {
+	origin := newEchoOrigin()
+	originURL := origin.URL
+	origin.Close()
+
+	rp, err := NewReverseProxy("payments", originURL, testTimeout, RetryOptions{
+		MaxAttempts: 3,
+		BackoffBase: 40 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	gatewayServer := httptest.NewServer(rp)
+	defer gatewayServer.Close()
+
+	start := time.Now()
+	resp, err := http.Get(gatewayServer.URL + "/payments")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	// 2 backoff sleeps between 3 attempts (40ms + 80ms base, before jitter)
+	// must have elapsed - proves retries actually happened over the real
+	// stack, not just fast-failing once.
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("request took %v, want it to reflect multiple retry attempts with backoff", elapsed)
 	}
 }
 
@@ -137,7 +262,7 @@ func TestNewReverseProxy_SlowOriginTimesOutWithBadGateway(t *testing.T) {
 	defer origin.Close()
 	defer close(unblock)
 
-	rp, err := NewReverseProxy("slow", origin.URL, testTimeout)
+	rp, err := NewReverseProxy("slow", origin.URL, testTimeout, RetryOptions{})
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}
@@ -199,7 +324,7 @@ func TestNewReverseProxy_ReusesConnectionsToOrigin(t *testing.T) {
 	origin.Start()
 	defer origin.Close()
 
-	rp, err := NewReverseProxy("catalog", origin.URL, testTimeout)
+	rp, err := NewReverseProxy("catalog", origin.URL, testTimeout, RetryOptions{})
 	if err != nil {
 		t.Fatalf("NewReverseProxy() error = %v", err)
 	}

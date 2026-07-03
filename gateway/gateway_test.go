@@ -57,6 +57,179 @@ func waitUntil(t *testing.T, cond func() bool) {
 	t.Fatal("condition not met within timeout")
 }
 
+func TestGateway_ExportsSpansToConfiguredOTLPEndpoint(t *testing.T) {
+	var received int32
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&received, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(collector.Close)
+
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, OTLPEndpoint: collector.URL})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	if _, err := http.Get(server.URL + "/echo"); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&received) > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("OTLP collector never received an export within the timeout")
+}
+
+func TestGateway_TracingDisabledByDefaultDoesNotBreakRequests(t *testing.T) {
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/echo")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestGateway_GeneratesRequestIDOnEveryResponse(t *testing.T) {
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/echo")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("X-Request-Id"); got == "" {
+		t.Fatal("X-Request-Id header missing from response")
+	}
+}
+
+func TestGateway_UntrustedInboundRequestIDIsIgnoredByDefault(t *testing.T) {
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/echo", nil)
+	req.Header.Set("X-Request-Id", "client-supplied-id")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("X-Request-Id"); got == "client-supplied-id" {
+		t.Fatal("X-Request-Id echoed the untrusted client-supplied value, want a freshly generated one")
+	}
+}
+
+func TestGateway_TrustsInboundRequestIDWhenConfigured(t *testing.T) {
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, TrustRequestID: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/echo", nil)
+	req.Header.Set("X-Request-Id", "upstream-lb-id")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("X-Request-Id"); got != "upstream-lb-id" {
+		t.Fatalf("X-Request-Id = %q, want %q", got, "upstream-lb-id")
+	}
+}
+
 func TestGateway_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin(t, "echo", nil)
 
@@ -434,6 +607,126 @@ services:
 	}
 	if !strings.Contains(body, `dealer_http_requests_total{method="POST",service="payments",status="401"} 1`) {
 		t.Fatalf("body missing payments 401 count, got:\n%s", body)
+	}
+}
+
+func TestGateway_HealthCheckProactivelyExcludesUnhealthyOrigin(t *testing.T) {
+	originA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Origin", "A")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(originA.Close)
+
+	originB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("X-Origin", "B")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(originB.Close)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_urls: [%q, %q]
+    health_check:
+      path: "/healthz"
+      interval: "20ms"
+`, originA.URL, originB.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval, UnhealthyCooldown: time.Hour})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	waitUntil(t, func() bool {
+		resp, err := http.Get(server.URL + "/catalog")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.Header.Get("X-Origin") == "A"
+	})
+
+	for i := 0; i < 6; i++ {
+		resp, err := http.Get(server.URL + "/catalog")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		tag := resp.Header.Get("X-Origin")
+		resp.Body.Close()
+		if tag != "A" {
+			t.Fatalf("request %d: X-Origin = %q, want %q (origin B fails its health check and should never be picked, even though it never received a real failed request)", i, tag, "A")
+		}
+	}
+}
+
+func TestGateway_HotReloadStopsPreviousGenerationProbers(t *testing.T) {
+	var originAHealthChecks atomic.Int32
+	originA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			originAHealthChecks.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(originA.Close)
+
+	originB := newEchoOrigin(t, "B", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: %q
+    health_check:
+      path: "/healthz"
+      interval: "10ms"
+`, originA.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	waitUntil(t, func() bool {
+		return originAHealthChecks.Load() > 0
+	})
+
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: %q
+`, originB.URL))
+
+	waitUntil(t, func() bool {
+		resp, err := http.Get(server.URL + "/catalog")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.Header.Get("X-Origin") == "B"
+	})
+
+	countAfterReload := originAHealthChecks.Load()
+	time.Sleep(testPollInterval * 5)
+	if got := originAHealthChecks.Load(); got != countAfterReload {
+		t.Fatalf("health check count kept climbing after reload (%d -> %d); old generation's Prober was not stopped", countAfterReload, got)
 	}
 }
 

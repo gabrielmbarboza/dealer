@@ -84,6 +84,63 @@ func TestRateLimiting_TracksClientsIndependently(t *testing.T) {
 	}
 }
 
+func TestRateLimiting_InvalidModeErrors(t *testing.T) {
+	if _, err := newRateLimiting(map[string]any{"requests_per_second": 1, "mode": "bogus"}); err == nil {
+		t.Fatal("newRateLimiting() error = nil, want non-nil for an unrecognized config.mode")
+	}
+}
+
+func TestRateLimiting_DefaultModeIsMemory(t *testing.T) {
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1})
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+	if _, ok := p.store.(*memoryStore); !ok {
+		t.Fatalf("store = %T, want *memoryStore", p.store)
+	}
+}
+
+func TestRateLimiting_DistributedModeUsesSugarDBBackedStore(t *testing.T) {
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 3, "mode": "distributed"})
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+	if _, ok := p.store.(*namespacedStore); !ok {
+		t.Fatalf("store = %T, want *namespacedStore", p.store)
+	}
+
+	for i := 0; i < 3; i++ {
+		if code := serveRateLimited(p, "9.9.9.9:1111"); code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want %d", i, code, http.StatusOK)
+		}
+	}
+	if code := serveRateLimited(p, "9.9.9.9:1111"); code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", code, http.StatusTooManyRequests)
+	}
+}
+
+func TestRateLimiting_DistributedModeNamespacesIndependentPluginInstances(t *testing.T) {
+	pA, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"})
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+	pB, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"})
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+
+	const clientAddr = "8.8.8.8:2222"
+	if code := serveRateLimited(pA, clientAddr); code != http.StatusOK {
+		t.Fatalf("plugin A, first request: status = %d, want %d", code, http.StatusOK)
+	}
+	// Two independently configured rate_limiting instances share the same
+	// underlying SugarDB store, but must not share counters for the same
+	// client - each plugin instance is namespaced separately.
+	if code := serveRateLimited(pB, clientAddr); code != http.StatusOK {
+		t.Fatalf("plugin B, first request: status = %d, want %d (must not be blocked by plugin A's counter)", code, http.StatusOK)
+	}
+}
+
 func TestRateLimiting_MissingRequestsPerSecondErrors(t *testing.T) {
 	if _, err := newRateLimiting(map[string]any{}); err == nil {
 		t.Fatal("newRateLimiting() error = nil, want non-nil when requests_per_second is missing")

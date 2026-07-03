@@ -26,10 +26,31 @@ func Build(cfg *config.Config, handlerFor func(config.Service) (http.Handler, er
 			continue
 		}
 
+		hasOptions := false
 		for _, method := range svc.Methods {
 			mux.Handle(method+" "+svc.Path, h)
+			if method == http.MethodOptions {
+				hasOptions = true
+			}
+		}
+
+		// A service using the cors plugin needs to see preflight OPTIONS
+		// requests to answer them, even if OPTIONS isn't in its declared
+		// methods - otherwise the mux itself 405s them before the plugin
+		// chain ever runs.
+		if !hasOptions && hasCORSPlugin(svc) {
+			mux.Handle(http.MethodOptions+" "+svc.Path, h)
 		}
 	}
 
 	return mux, nil
+}
+
+func hasCORSPlugin(svc config.Service) bool {
+	for _, p := range svc.Plugins {
+		if p.Name == "cors" {
+			return true
+		}
+	}
+	return false
 }

@@ -36,3 +36,13 @@ func TestBuild_RateLimiting(t *testing.T) {
 		t.Fatalf("Build(%q).Name() = %q", "rate_limiting", p.Name())
 	}
 }
+
+func TestBuild_CORS(t *testing.T) {
+	p, err := Build("cors", map[string]any{"allowed_origins": []any{"https://example.com"}})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v", "cors", err)
+	}
+	if p.Name() != "cors" {
+		t.Fatalf("Build(%q).Name() = %q", "cors", p.Name())
+	}
+}

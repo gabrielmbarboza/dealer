@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,11 @@ func Parse(data []byte) (*Config, error) {
 		for _, u := range svc.OriginURLs {
 			if u == "" {
 				return nil, fmt.Errorf("config: service %q: origin_urls entries must not be empty", svc.Name)
+			}
+		}
+		if svc.HealthCheck != nil && svc.HealthCheck.Interval != "" {
+			if _, err := time.ParseDuration(svc.HealthCheck.Interval); err != nil {
+				return nil, fmt.Errorf("config: service %q: health_check.interval: %w", svc.Name, err)
 			}
 		}
 	}

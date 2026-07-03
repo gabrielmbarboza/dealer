@@ -113,6 +113,54 @@ func TestBuild_UnmatchedPathIsNotFound(t *testing.T) {
 	}
 }
 
+func TestBuild_CORSPluginGetsAutoRegisteredOptionsRoute(t *testing.T) {
+	cfg := &config.Config{
+		Services: []config.Service{
+			{
+				Name:      "storefront",
+				Path:      "/storefront",
+				OriginURL: "http://example.com",
+				Methods:   []string{"GET", "POST"},
+				Plugins:   []config.PluginConfig{{Name: "cors"}},
+			},
+		},
+	}
+
+	mux, err := Build(cfg, stubHandlerFor(t))
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodOptions, "/storefront", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (OPTIONS must reach the handler chain so the cors plugin can answer preflight requests)", rec.Code, http.StatusOK)
+	}
+}
+
+func TestBuild_WithoutCORSPluginOptionsStillReturns405(t *testing.T) {
+	cfg := &config.Config{
+		Services: []config.Service{
+			{Name: "checkout", Path: "/checkout", OriginURL: "http://example.com", Methods: []string{"GET"}},
+		},
+	}
+
+	mux, err := Build(cfg, stubHandlerFor(t))
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodOptions, "/checkout", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d (no cors plugin configured, so OPTIONS should not be auto-registered)", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
 func TestBuild_HandlerForErrorPropagates(t *testing.T) {
 	cfg := &config.Config{
 		Services: []config.Service{

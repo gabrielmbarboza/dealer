@@ -8,6 +8,7 @@ var builtins = map[string]Factory{
 	"request_size_limiting": newRequestSizeLimiting,
 	"jwt_auth":              newJWTAuth,
 	"rate_limiting":         newRateLimiting,
+	"cors":                  newCORS,
 }
 
 // Build constructs the named built-in plugin from its yaml config map.

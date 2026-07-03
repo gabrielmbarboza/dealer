@@ -173,6 +173,89 @@ services:
 	}
 }
 
+func TestParse_RetryUnsafeMethodsRoundTrips(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "payments"
+    path: "/payments"
+    origin_url: "http://0.0.0.0:3002"
+    retry_unsafe_methods: true
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !cfg.Services[0].RetryUnsafeMethods {
+		t.Fatal("RetryUnsafeMethods = false, want true")
+	}
+}
+
+func TestParse_RetryUnsafeMethodsDefaultsFalse(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Services[0].RetryUnsafeMethods {
+		t.Fatal("RetryUnsafeMethods = true, want false by default")
+	}
+}
+
+func TestParse_HealthCheckRoundTrips(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
+    health_check:
+      path: "/healthz"
+      interval: "5s"
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	hc := cfg.Services[0].HealthCheck
+	if hc == nil {
+		t.Fatal("HealthCheck = nil, want non-nil")
+	}
+	if hc.Path != "/healthz" || hc.Interval != "5s" {
+		t.Fatalf("HealthCheck = %+v", hc)
+	}
+}
+
+func TestParse_HealthCheckIsOptional(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Services[0].HealthCheck != nil {
+		t.Fatalf("HealthCheck = %+v, want nil", cfg.Services[0].HealthCheck)
+	}
+}
+
+func TestParse_HealthCheckInvalidIntervalErrors(t *testing.T) {
+	_, err := Parse([]byte(`
+services:
+  - name: "catalog"
+    path: "/catalog"
+    origin_url: "http://0.0.0.0:3001"
+    health_check:
+      interval: "not-a-duration"
+`))
+	if err == nil {
+		t.Fatal("Parse() error = nil, want non-nil for an invalid health_check.interval")
+	}
+}
+
 func TestLoad_ReadsFileFromDisk(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")

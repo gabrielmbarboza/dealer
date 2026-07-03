@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gabrielmbarboza/dealer/gateway/internal/tracing"
 )
 
 func TestHTTPLog_LogsMethodAndPath(t *testing.T) {
@@ -88,6 +90,49 @@ func TestHTTPLog_NeverBlocks(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHTTPLog_IncludesRequestIDWhenPresentInContext(t *testing.T) {
+	var buf bytes.Buffer
+	p := newHTTPLogWithWriter(&buf)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Mirrors how gateway.go composes things: tracing.Middleware runs
+	// outermost (assigning the request id) with the plugin chain nested
+	// inside it.
+	handler := tracing.Middleware(false)(p.Wrap(next))
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	p.flush()
+
+	logged := buf.String()
+	if !strings.Contains(logged, "request_id=") {
+		t.Fatalf("log output = %q, want it to contain a request_id field", logged)
+	}
+}
+
+func TestHTTPLog_OmitsRequestIDFieldWhenAbsentFromContext(t *testing.T) {
+	var buf bytes.Buffer
+	p := newHTTPLogWithWriter(&buf)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	rec := httptest.NewRecorder()
+	p.Wrap(next).ServeHTTP(rec, req)
+	p.flush()
+
+	logged := buf.String()
+	if strings.Contains(logged, "request_id=") {
+		t.Fatalf("log output = %q, want no request_id field when tracing.Middleware never ran", logged)
 	}
 }
 
