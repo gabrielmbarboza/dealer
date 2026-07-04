@@ -36,6 +36,10 @@ Lint with [golangci-lint](https://golangci-lint.run/) (config at `.golangci.yml`
 
 CI (`.github/workflows/ci.yml`) runs all of the above on every push and pull request.
 
+## Versioning
+
+Releases are tagged with [SemVer](https://semver.org/) (e.g. `v0.1.0`). `config.Version` defaults to `dev` and is only set at build time via `-ldflags "-X github.com/gabrielmbarboza/dealer/config.Version=<version>"` (see `Dockerfile`); `docker compose` picks this up from a `VERSION` environment variable, e.g. `VERSION=$(git describe --tags --always) docker compose up --build`. To cut a release, tag the commit (`git tag -a vX.Y.Z -m "..."`) and push the tag (`git push origin vX.Y.Z`).
+
 ## Test-Driven Development
 
 This project follows TDD (see `AGENTS.md`): write a failing test before writing implementation code, write the minimum code to make it pass, then refactor. Please follow the same flow for new contributions.

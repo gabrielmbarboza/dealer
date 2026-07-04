@@ -1,4 +1,11 @@
-# Dealer API Gateway
+# Dealer
+
+> A lightweight, hot-reloadable API Gateway written in Go.
+
+[![Version][version-image]][version-url]
+[![CI][ci-image]][ci-url]
+[![Go Version][go-image]][go-url]
+[![License: MIT][license-image]][license-url]
 
 ![alt text](https://github.com/gabrielmbarboza/dealer/blob/main/assets/images/dealer_logo.jpg?raw=true)
 
@@ -7,7 +14,8 @@
 - [About](#about)
 - [Getting Started](#getting_started)
 - [Usage](#usage)
-- [Contributing](CONTRIBUTING.md)
+- [Development](#development)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## About <a name = "about"></a>
@@ -54,6 +62,12 @@ Or build and run the container with Docker Compose (copy `.env.example` to `.env
 ```
 cp .env.example .env
 docker compose up --build
+```
+
+The image is tagged `dev` by default; to embed a real released version (e.g. after checking out a tag), export `VERSION` before building — `docker-compose.yml` passes it through as the `VERSION` build arg, which is compiled into the binary and reported by `GET /` on the gateway:
+
+```
+VERSION=$(git describe --tags --always) docker compose up --build
 ```
 
 The gateway listens on `0.0.0.0:3000` by default (override with `DEALER_LISTEN_ADDR`) and reads `config.yml` from the current directory by default. Under Docker Compose, the project directory is bind-mounted read-only, so editing `config.yml` on the host is picked up by hot-reload without rebuilding the image.
@@ -214,6 +228,38 @@ curl -X POST http://localhost:3000/payments \
   -d '{"amount": 100}'
 ```
 
+## Development <a name = "development"></a>
+
+This repository is a [Go workspace](https://go.dev/ref/mod#workspaces) made up of three modules — `cmd/dealer` (entrypoint), `config` (project metadata) and `gateway` (the gateway itself). Build, test and lint run per module:
+
+```sh
+for m in cmd/dealer config gateway; do
+  (cd "$m" && go build ./... && go vet ./... && go test ./... -race)
+done
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, including linting and the project's TDD convention.
+
+## Contributing <a name = "contributing"></a>
+
+1. Fork it (<https://github.com/gabrielmbarboza/dealer/fork>)
+2. Create your feature branch (`git checkout -b feature/fooBar`)
+3. Commit your changes following [Conventional Commits](https://www.conventionalcommits.org/) (`git commit -m 'feat(scope): add fooBar'`)
+4. Push to the branch (`git push origin feature/fooBar`)
+5. Open a Pull Request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on commit conventions, tests and lint requirements.
+
 ## License <a name = "license"></a>
 
 This project is licensed under the [MIT License](LICENSE).
+
+<!-- Markdown link & img dfn's -->
+[version-image]: https://img.shields.io/github/v/tag/gabrielmbarboza/dealer?label=version&style=flat-square
+[version-url]: https://github.com/gabrielmbarboza/dealer/tags
+[ci-image]: https://github.com/gabrielmbarboza/dealer/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/gabrielmbarboza/dealer/actions/workflows/ci.yml
+[go-image]: https://img.shields.io/badge/go-1.25.11-00ADD8?style=flat-square&logo=go
+[go-url]: https://go.dev/dl/
+[license-image]: https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square
+[license-url]: LICENSE
