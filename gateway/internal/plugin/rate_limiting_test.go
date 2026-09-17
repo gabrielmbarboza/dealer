@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-func newTestRateLimiting(t *testing.T, cfg map[string]any) (*rateLimiting, error) {
+func newTestRateLimiting(t *testing.T, cfg map[string]any, instanceID string) (*rateLimiting, error) {
 	t.Helper()
-	p, err := newRateLimiting(cfg)
+	p, err := newRateLimiting(cfg, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func serveRateLimited(p Plugin, remoteAddr string) int {
 }
 
 func TestRateLimiting_AllowsUpToBurstThenBlocks(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 3})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 3}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -46,7 +46,7 @@ func TestRateLimiting_AllowsUpToBurstThenBlocks(t *testing.T) {
 }
 
 func TestRateLimiting_RefillsOverTime(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRateLimiting_RefillsOverTime(t *testing.T) {
 }
 
 func TestRateLimiting_TracksClientsIndependently(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -85,13 +85,13 @@ func TestRateLimiting_TracksClientsIndependently(t *testing.T) {
 }
 
 func TestRateLimiting_InvalidModeErrors(t *testing.T) {
-	if _, err := newRateLimiting(map[string]any{"requests_per_second": 1, "mode": "bogus"}); err == nil {
+	if _, err := newRateLimiting(map[string]any{"requests_per_second": 1, "mode": "bogus"}, ""); err == nil {
 		t.Fatal("newRateLimiting() error = nil, want non-nil for an unrecognized config.mode")
 	}
 }
 
 func TestRateLimiting_DefaultModeIsMemory(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -101,7 +101,7 @@ func TestRateLimiting_DefaultModeIsMemory(t *testing.T) {
 }
 
 func TestRateLimiting_DistributedModeUsesSugarDBBackedStore(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 3, "mode": "distributed"})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 3, "mode": "distributed"}, "catalog:0")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -120,11 +120,15 @@ func TestRateLimiting_DistributedModeUsesSugarDBBackedStore(t *testing.T) {
 }
 
 func TestRateLimiting_DistributedModeNamespacesIndependentPluginInstances(t *testing.T) {
-	pA, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"})
+	// Two different plugin declarations - e.g. two different services, or
+	// two rate_limiting blocks in the same service - get distinct
+	// instanceIDs from plugin.Build (see gateway.buildMux) and must not
+	// share counters for the same client.
+	pA, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"}, "catalog:0")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
-	pB, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"})
+	pB, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"}, "payments:0")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -133,34 +137,57 @@ func TestRateLimiting_DistributedModeNamespacesIndependentPluginInstances(t *tes
 	if code := serveRateLimited(pA, clientAddr); code != http.StatusOK {
 		t.Fatalf("plugin A, first request: status = %d, want %d", code, http.StatusOK)
 	}
-	// Two independently configured rate_limiting instances share the same
-	// underlying SugarDB store, but must not share counters for the same
-	// client - each plugin instance is namespaced separately.
 	if code := serveRateLimited(pB, clientAddr); code != http.StatusOK {
 		t.Fatalf("plugin B, first request: status = %d, want %d (must not be blocked by plugin A's counter)", code, http.StatusOK)
 	}
 }
 
+// TestRateLimiting_DistributedModeSharesCounterAcrossInstantiationsWithSameID
+// proves the actual point of "distributed" mode: two separate rateLimiting
+// instances built from the same instanceID - as happens on every config
+// hot-reload, and across every gateway process loading the same config -
+// must share the same counter instead of each starting fresh.
+func TestRateLimiting_DistributedModeSharesCounterAcrossInstantiationsWithSameID(t *testing.T) {
+	cfg := map[string]any{"requests_per_second": 1, "burst": 1, "mode": "distributed"}
+
+	first, err := newTestRateLimiting(t, cfg, "catalog:0")
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+	const clientAddr = "7.7.7.7:3333"
+	if code := serveRateLimited(first, clientAddr); code != http.StatusOK {
+		t.Fatalf("first instance, first request: status = %d, want %d", code, http.StatusOK)
+	}
+
+	reloaded, err := newTestRateLimiting(t, cfg, "catalog:0")
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+	if code := serveRateLimited(reloaded, clientAddr); code != http.StatusTooManyRequests {
+		t.Fatalf("instance rebuilt with the same instanceID: status = %d, want %d (counter must survive a rebuild)", code, http.StatusTooManyRequests)
+	}
+}
+
 func TestRateLimiting_MissingRequestsPerSecondErrors(t *testing.T) {
-	if _, err := newRateLimiting(map[string]any{}); err == nil {
+	if _, err := newRateLimiting(map[string]any{}, ""); err == nil {
 		t.Fatal("newRateLimiting() error = nil, want non-nil when requests_per_second is missing")
 	}
 }
 
 func TestRateLimiting_NonPositiveRequestsPerSecondErrors(t *testing.T) {
-	if _, err := newRateLimiting(map[string]any{"requests_per_second": 0}); err == nil {
+	if _, err := newRateLimiting(map[string]any{"requests_per_second": 0}, ""); err == nil {
 		t.Fatal("newRateLimiting() error = nil, want non-nil when requests_per_second is not positive")
 	}
 }
 
 func TestRateLimiting_BurstBelowOneErrors(t *testing.T) {
-	if _, err := newRateLimiting(map[string]any{"requests_per_second": 5, "burst": 0}); err == nil {
+	if _, err := newRateLimiting(map[string]any{"requests_per_second": 5, "burst": 0}, ""); err == nil {
 		t.Fatal("newRateLimiting() error = nil, want non-nil when burst is below 1")
 	}
 }
 
 func TestRateLimiting_DefaultsBurstToRequestsPerSecond(t *testing.T) {
-	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 3})
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 3}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}
@@ -170,7 +197,7 @@ func TestRateLimiting_DefaultsBurstToRequestsPerSecond(t *testing.T) {
 }
 
 func TestRateLimiting_Name(t *testing.T) {
-	p, err := newRateLimiting(map[string]any{"requests_per_second": 1})
+	p, err := newRateLimiting(map[string]any{"requests_per_second": 1}, "")
 	if err != nil {
 		t.Fatalf("newRateLimiting() error = %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,11 @@ const DefaultRetryBackoffBase = 100 * time.Millisecond
 // DefaultBreakerCooldown is used when Options.BreakerCooldown is not set.
 // Only relevant when Options.BreakerThreshold is above 0.
 const DefaultBreakerCooldown = 30 * time.Second
+
+// DefaultLogFlushInterval bounds how long a buffered http_log line can sit
+// unwritten during low-traffic periods, since the bufio.Writer's own
+// fill-triggered flush isn't reliable when requests are infrequent.
+const DefaultLogFlushInterval = 5 * time.Second
 
 // Options configures a Gateway.
 type Options struct {
@@ -160,6 +166,16 @@ type Gateway struct {
 	// so hot-reload never leaks a generation's probers.
 	proberCancel atomic.Pointer[context.CancelFunc]
 
+	// plugins holds the current generation's flattened plugin instances,
+	// so Close can flush any buffered http_log output one last time - see
+	// logFlusherCancel.
+	plugins atomic.Pointer[[]plugin.Plugin]
+
+	// logFlusherCancel stops the previous generation's periodic http_log
+	// flush goroutine, mirroring proberCancel exactly and for the same
+	// reason: hot-reload must never leak a generation's goroutine.
+	logFlusherCancel atomic.Pointer[context.CancelFunc]
+
 	// tracingShutdown flushes and stops the OpenTelemetry TracerProvider.
 	// A no-op when tracing was never enabled (Options.OTLPEndpoint empty).
 	tracingShutdown func(context.Context) error
@@ -231,12 +247,13 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		resolved.breakerCooldown = DefaultBreakerCooldown
 	}
 
-	mux, probers, err := buildMux(cfg, resolved, gw.metrics)
+	mux, probers, plugins, err := buildMux(cfg, resolved, gw.metrics)
 	if err != nil {
 		return nil, err
 	}
 	gw.mux.Store(mux)
 	gw.startProbers(probers)
+	gw.startLogFlusher(plugins)
 
 	interval := opts.PollInterval
 	if interval <= 0 {
@@ -244,12 +261,13 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	}
 
 	watcher := config.NewWatcher(configPath, interval, func(newCfg *config.Config) error {
-		newMux, newProbers, err := buildMux(newCfg, resolved, gw.metrics)
+		newMux, newProbers, newPlugins, err := buildMux(newCfg, resolved, gw.metrics)
 		if err != nil {
 			return err
 		}
 		gw.mux.Store(newMux)
 		gw.startProbers(newProbers)
+		gw.startLogFlusher(newPlugins)
 		return nil
 	})
 
@@ -272,6 +290,31 @@ func (g *Gateway) startProbers(probers []*proxy.Prober) {
 	}
 }
 
+// startLogFlusher stores plugins for Close to give a final flush to, and
+// starts a goroutine that periodically flushes every http_log instance
+// among them under a fresh context - mirrors startProbers exactly, so
+// hot-reload never leaks a generation's flush goroutine either.
+func (g *Gateway) startLogFlusher(plugins []plugin.Plugin) {
+	g.plugins.Store(&plugins)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(DefaultLogFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				plugin.FlushLoggers(plugins)
+			}
+		}
+	}()
+	if oldCancel := g.logFlusherCancel.Swap(&cancel); oldCancel != nil {
+		(*oldCancel)()
+	}
+}
+
 // ServeHTTP assigns a request id (see tracing.Middleware), then dispatches
 // to the currently active routing table.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -279,13 +322,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Close stops the background config watcher, the current generation's
-// active health-check probers, and flushes/stops OpenTelemetry tracing.
+// active health-check probers and log flusher, gives every http_log
+// instance one last flush (so buffered lines aren't lost on a graceful
+// shutdown - see startLogFlusher), and flushes/stops OpenTelemetry tracing.
 func (g *Gateway) Close() {
 	if g.cancel != nil {
 		g.cancel()
 	}
 	if cancel := g.proberCancel.Load(); cancel != nil {
 		(*cancel)()
+	}
+	if cancel := g.logFlusherCancel.Load(); cancel != nil {
+		(*cancel)()
+	}
+	if plugins := g.plugins.Load(); plugins != nil {
+		plugin.FlushLoggers(*plugins)
 	}
 	if g.tracingShutdown != nil {
 		_ = g.tracingShutdown(context.Background())
@@ -301,20 +352,32 @@ func (g *Gateway) MetricsHandler() http.Handler {
 // request_size_limiting plugin is prepended for every service so
 // maxBodyBytes applies even when a service doesn't configure its own. It
 // also returns a Prober per service that resolves to a non-empty health
-// check path, ready to be started by the caller.
-func buildMux(cfg *config.Config, opts resolvedOptions, recorder *metrics.Recorder) (*http.ServeMux, []*proxy.Prober, error) {
+// check path, ready to be started by the caller, and every plugin instance
+// built (flattened across services), for the caller to periodically flush
+// (see Gateway.startLogFlusher) and flush a final time on shutdown.
+func buildMux(cfg *config.Config, opts resolvedOptions, recorder *metrics.Recorder) (*http.ServeMux, []*proxy.Prober, []plugin.Plugin, error) {
 	var probers []*proxy.Prober
+	var allPlugins []plugin.Plugin
 
 	mux, err := router.Build(cfg, func(svc config.Service) (http.Handler, error) {
 		plugins := make([]plugin.Plugin, 0, len(svc.Plugins)+1)
 		plugins = append(plugins, plugin.NewRequestSizeLimiting(opts.maxBodyBytes))
-		for _, pc := range svc.Plugins {
-			p, err := plugin.Build(pc.Name, pc.Config)
+		for i, pc := range svc.Plugins {
+			// instanceID must stay the same across config reloads and
+			// across every gateway process loading the same config, so
+			// it's derived from the plugin's position in the config, not
+			// randomly generated - rate_limiting's "distributed" mode
+			// relies on it to keep sharing its SugarDB-backed counters
+			// instead of starting fresh on every rebuild (see
+			// plugin.Build and namespacedStore).
+			instanceID := svc.Name + ":" + strconv.Itoa(i)
+			p, err := plugin.Build(pc.Name, pc.Config, instanceID)
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: %w", pc.Name, err)
 			}
 			plugins = append(plugins, p)
 		}
+		allPlugins = append(allPlugins, plugins...)
 
 		origins := svc.OriginURLs
 		if len(origins) == 0 {
@@ -355,8 +418,8 @@ func buildMux(cfg *config.Config, opts resolvedOptions, recorder *metrics.Record
 		return recorder.Wrap(svc.Name, plugin.Chain(plugins, rp)), nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return mux, probers, nil
+	return mux, probers, allPlugins, nil
 }

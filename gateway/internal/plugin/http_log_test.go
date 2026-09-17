@@ -22,7 +22,7 @@ func TestHTTPLog_LogsMethodAndPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/payments", nil)
 	rec := httptest.NewRecorder()
 	p.Wrap(next).ServeHTTP(rec, req)
-	p.flush()
+	p.Flush()
 
 	logged := buf.String()
 	if !strings.Contains(logged, http.MethodPost) || !strings.Contains(logged, "/payments") {
@@ -60,7 +60,7 @@ func TestHTTPLog_BatchesWritesToUnderlyingWriter(t *testing.T) {
 		rec := httptest.NewRecorder()
 		p.Wrap(next).ServeHTTP(rec, req)
 	}
-	p.flush()
+	p.Flush()
 
 	cw.mu.Lock()
 	calls := cw.calls
@@ -109,7 +109,7 @@ func TestHTTPLog_IncludesRequestIDWhenPresentInContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	p.flush()
+	p.Flush()
 
 	logged := buf.String()
 	if !strings.Contains(logged, "request_id=") {
@@ -128,7 +128,7 @@ func TestHTTPLog_OmitsRequestIDFieldWhenAbsentFromContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
 	rec := httptest.NewRecorder()
 	p.Wrap(next).ServeHTTP(rec, req)
-	p.flush()
+	p.Flush()
 
 	logged := buf.String()
 	if strings.Contains(logged, "request_id=") {
@@ -143,5 +143,33 @@ func TestHTTPLog_Name(t *testing.T) {
 	}
 	if p.Name() != "http_log" {
 		t.Fatalf("Name() = %q, want %q", p.Name(), "http_log")
+	}
+}
+
+func TestFlushLoggers_FlushesHTTPLogInstancesAndIgnoresOthers(t *testing.T) {
+	var buf bytes.Buffer
+	hl := newHTTPLogWithWriter(&buf)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	rec := httptest.NewRecorder()
+	hl.Wrap(next).ServeHTTP(rec, req)
+
+	other, err := newAddHeader(map[string]any{})
+	if err != nil {
+		t.Fatalf("newAddHeader() error = %v", err)
+	}
+
+	if logged := buf.String(); logged != "" {
+		t.Fatalf("log output = %q, want empty before FlushLoggers", logged)
+	}
+
+	FlushLoggers([]Plugin{hl, other})
+
+	logged := buf.String()
+	if !strings.Contains(logged, "/catalog") {
+		t.Fatalf("log output = %q, want it to contain the buffered line after FlushLoggers", logged)
 	}
 }

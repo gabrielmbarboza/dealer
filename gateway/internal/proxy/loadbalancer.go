@@ -22,7 +22,7 @@ type BreakerOptions struct {
 	Cooldown time.Duration
 }
 
-type weightedOrigin struct {
+type roundRobinOrigin struct {
 	url     string
 	handler http.Handler
 	state   *originState
@@ -30,7 +30,7 @@ type weightedOrigin struct {
 
 type roundRobinProxy struct {
 	name     string
-	origins  []*weightedOrigin
+	origins  []*roundRobinOrigin
 	cooldown time.Duration
 	breaker  BreakerOptions
 	now      func() time.Time
@@ -48,7 +48,7 @@ func NewOriginProxy(name string, originURLs []string, timeout, cooldown time.Dur
 
 	lb := &roundRobinProxy{
 		name:     name,
-		origins:  make([]*weightedOrigin, 0, len(originURLs)),
+		origins:  make([]*roundRobinOrigin, 0, len(originURLs)),
 		cooldown: cooldown,
 		breaker:  breaker,
 		now:      time.Now,
@@ -68,7 +68,7 @@ func NewOriginProxy(name string, originURLs []string, timeout, cooldown time.Dur
 			state.recordSuccess()
 			return nil
 		}
-		lb.origins = append(lb.origins, &weightedOrigin{url: u, handler: rp, state: state})
+		lb.origins = append(lb.origins, &roundRobinOrigin{url: u, handler: rp, state: state})
 	}
 
 	return lb, nil

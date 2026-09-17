@@ -69,9 +69,26 @@ func (p *httpLog) log(method, path, requestID string) {
 	_ = p.writer.WriteByte('\n')
 }
 
-// flush forces any buffered log lines out to the underlying writer.
-func (p *httpLog) flush() {
+// Flush forces any buffered log lines out to the underlying writer.
+// Exported so the gateway can flush every http_log instance periodically
+// and on shutdown - see FlushLoggers - since the Plugin interface itself
+// has no Close/lifecycle hook (a goroutine tied to plugin instantiation
+// would leak one per config hot-reload, so this can't self-schedule).
+func (p *httpLog) Flush() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_ = p.writer.Flush()
+}
+
+// FlushLoggers flushes every http_log plugin instance found in plugins.
+// Without this, a buffered log line only reaches its underlying writer
+// once the bufio.Writer's buffer fills - unreliable at low request rates
+// and guaranteed to lose the most recent lines on a graceful shutdown, not
+// just an ungraceful one. Non-http_log plugins are ignored.
+func FlushLoggers(plugins []Plugin) {
+	for _, p := range plugins {
+		if hl, ok := p.(*httpLog); ok {
+			hl.Flush()
+		}
+	}
 }

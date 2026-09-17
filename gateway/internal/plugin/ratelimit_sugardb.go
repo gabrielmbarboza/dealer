@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -139,14 +137,4 @@ func getSharedSugarDBStore() (*sugarDBStore, error) {
 		sharedSugarDB = store
 	})
 	return sharedSugarDB, sharedSugarDBSetup
-}
-
-// randomID returns a short random hex identifier used to namespace one
-// rate_limiting plugin instance's keys in the shared distributed store.
-func randomID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate id: %w", err)
-	}
-	return hex.EncodeToString(b), nil
 }

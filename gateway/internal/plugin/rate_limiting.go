@@ -71,11 +71,16 @@ func (s *memoryStore) sweepLocked(now time.Time) {
 	}
 }
 
-// namespacedStore prefixes every key with a per-plugin-instance id before
-// delegating to a shared store. Without this, two independently configured
-// rate_limiting plugins in distributed mode would share one counter per
-// client IP instead of each tracking it separately - the isolation the
-// memoryStore gives for free just by being a separate Go map per instance.
+// namespacedStore prefixes every key with a stable per-plugin-declaration
+// id before delegating to a shared store. Without this, two independently
+// configured rate_limiting plugins in distributed mode would share one
+// counter per client IP instead of each tracking it separately - the
+// isolation the memoryStore gives for free just by being a separate Go map
+// per instance. The prefix must stay the same across config reloads and
+// across every gateway process enforcing the same declared limit (that's
+// the entire point of "distributed" mode - see the README), so it's
+// derived from the plugin's position in the config, never randomly
+// generated per instantiation.
 type namespacedStore struct {
 	prefix string
 	inner  tokenBucketStore
@@ -92,7 +97,14 @@ type rateLimiting struct {
 	store             tokenBucketStore
 }
 
-func newRateLimiting(cfg map[string]any) (Plugin, error) {
+// instanceID identifies this plugin declaration and namespaces its
+// "distributed" mode counters in the shared SugarDB store - see
+// namespacedStore. The caller (plugin.Build) must supply something stable
+// across config reloads and gateway processes loading the same config
+// (e.g. "service_name:plugin_index"), not a randomly generated value: a
+// distributed rate limiter is only useful if two processes enforcing the
+// same declared limit actually share its counters.
+func newRateLimiting(cfg map[string]any, instanceID string) (Plugin, error) {
 	raw, ok := cfg["requests_per_second"]
 	if !ok {
 		return nil, fmt.Errorf("rate_limiting: config.requests_per_second is required")
@@ -126,11 +138,7 @@ func newRateLimiting(cfg map[string]any) (Plugin, error) {
 		if err != nil {
 			return nil, fmt.Errorf("rate_limiting: config.mode \"distributed\": %w", err)
 		}
-		prefix, err := randomID()
-		if err != nil {
-			return nil, fmt.Errorf("rate_limiting: config.mode \"distributed\": %w", err)
-		}
-		store = &namespacedStore{prefix: prefix, inner: shared}
+		store = &namespacedStore{prefix: instanceID, inner: shared}
 	default:
 		return nil, fmt.Errorf("rate_limiting: config.mode must be \"memory\" or \"distributed\", got %q", mode)
 	}
