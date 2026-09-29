@@ -8,8 +8,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -113,5 +116,66 @@ func TestNewDebugServer_EnabledWithAddr(t *testing.T) {
 	}
 	if s.Handler != nil {
 		t.Fatalf("Handler = %v, want nil so it falls back to http.DefaultServeMux (where net/http/pprof registers itself)", s.Handler)
+	}
+}
+
+// gatewayStub stands in for the gateway handler in newRootMux tests.
+var gatewayStub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Handled-By", "gateway")
+	w.WriteHeader(http.StatusOK)
+})
+
+func handledBy(t *testing.T, mux http.Handler, path string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Header().Get("X-Handled-By") == "gateway" {
+		return "gateway"
+	}
+	if strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+		return "info"
+	}
+	return "unknown"
+}
+
+func TestNewRootMux_DefaultServesInfoAtRoot(t *testing.T) {
+	mux, err := newRootMux(gatewayStub, "/")
+	if err != nil {
+		t.Fatalf("newRootMux() error = %v", err)
+	}
+	if got := handledBy(t, mux, "/"); got != "info" {
+		t.Fatalf("GET / handled by %s, want info", got)
+	}
+	if got := handledBy(t, mux, "/catalog"); got != "gateway" {
+		t.Fatalf("GET /catalog handled by %s, want gateway", got)
+	}
+}
+
+func TestNewRootMux_CustomPathFreesRootForServices(t *testing.T) {
+	mux, err := newRootMux(gatewayStub, "/_dealer")
+	if err != nil {
+		t.Fatalf("newRootMux() error = %v", err)
+	}
+	if got := handledBy(t, mux, "/_dealer"); got != "info" {
+		t.Fatalf("GET /_dealer handled by %s, want info", got)
+	}
+	if got := handledBy(t, mux, "/"); got != "gateway" {
+		t.Fatalf("GET / handled by %s, want gateway so a service can own the root", got)
+	}
+}
+
+func TestNewRootMux_EmptyPathDisablesInfo(t *testing.T) {
+	mux, err := newRootMux(gatewayStub, "")
+	if err != nil {
+		t.Fatalf("newRootMux() error = %v", err)
+	}
+	if got := handledBy(t, mux, "/"); got != "gateway" {
+		t.Fatalf("GET / handled by %s, want gateway when info is disabled", got)
+	}
+}
+
+func TestNewRootMux_RejectsRelativePath(t *testing.T) {
+	if _, err := newRootMux(gatewayStub, "_dealer"); err == nil {
+		t.Fatal("newRootMux() error = nil, want an error for a path without a leading slash")
 	}
 }

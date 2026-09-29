@@ -193,6 +193,7 @@ Environment variables:
 
 - `DEALER_LISTEN_ADDR` - address the gateway's public HTTP(S) listener binds to (default: `0.0.0.0:3000`).
 - `DEALER_CONFIG_PATH` - path to the config file (default: `config.yml`).
+- `DEALER_INFO_PATH` - path of the `GET` endpoint reporting the gateway's project info and version (default: `/`). Serving it at `/` shadows any service configured at the root path - e.g. a web app routed through the gateway - so move it (e.g. `/_dealer`) or set it to an empty value to disable it.
 - `DEALER_CONFIG_POLL_INTERVAL` - how often the config file is checked for changes, as a Go duration (e.g. `2s`, default: `2s`).
 - `DEALER_ORIGIN_TIMEOUT` - how long to wait when dialing/reading response headers from an internal service before failing with a 502, as a Go duration (default: `10s`).
 - `DEALER_MAX_BODY_BYTES` - default request body size cap (in bytes) applied to every service, even ones without their own `request_size_limiting` plugin (default: `10485760`, i.e. 10 MiB).

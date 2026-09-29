@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -187,9 +188,14 @@ func main() {
 
 	metricsSrv := newMetricsServer(os.Getenv("DEALER_METRICS_ADDR"), gw.MetricsHandler())
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", infoHandler)
-	mux.Handle("/", gw)
+	infoPath, ok := os.LookupEnv("DEALER_INFO_PATH")
+	if !ok {
+		infoPath = "/"
+	}
+	mux, err := newRootMux(gw, infoPath)
+	if err != nil {
+		log.Fatalf("main: invalid DEALER_INFO_PATH %q: %v", infoPath, err)
+	}
 
 	srv := &http.Server{
 		Addr:              listenAddr,
@@ -306,6 +312,26 @@ func newMetricsServer(addr string, handler http.Handler) *http.Server {
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
+}
+
+// newRootMux mounts the gateway at "/" and the project info endpoint at
+// infoPath (exact match). infoPath "/" keeps the historical behavior but
+// shadows any configured service at the root path (e.g. a web app), so it
+// can be moved elsewhere or, with an empty infoPath, disabled.
+func newRootMux(gw http.Handler, infoPath string) (*http.ServeMux, error) {
+	mux := http.NewServeMux()
+	switch {
+	case infoPath == "":
+		// info endpoint disabled
+	case !strings.HasPrefix(infoPath, "/"):
+		return nil, fmt.Errorf("must start with \"/\"")
+	case infoPath == "/":
+		mux.HandleFunc("GET /{$}", infoHandler)
+	default:
+		mux.HandleFunc("GET "+infoPath, infoHandler)
+	}
+	mux.Handle("/", gw)
+	return mux, nil
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
