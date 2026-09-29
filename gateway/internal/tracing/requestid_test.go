@@ -85,6 +85,46 @@ func TestMiddleware_TrustEnabledButNoInboundHeaderStillGenerates(t *testing.T) {
 	}
 }
 
+func TestMiddleware_SetsIDOnRequestHeaderForOrigins(t *testing.T) {
+	var seenInContext, seenOnRequest string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenInContext = FromContext(r.Context())
+		seenOnRequest = r.Header.Get(HeaderName)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	rec := httptest.NewRecorder()
+	Middleware(false)(next).ServeHTTP(rec, req)
+
+	if seenOnRequest == "" || seenOnRequest != seenInContext {
+		t.Fatalf("request header %s = %q, want the gateway's id %q so origins can correlate their logs", HeaderName, seenOnRequest, seenInContext)
+	}
+}
+
+func TestMiddleware_OverwritesUntrustedInboundHeaderOnRequest(t *testing.T) {
+	const inboundID = "untrusted-client-supplied-id"
+
+	var seenInContext, seenOnRequest string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenInContext = FromContext(r.Context())
+		seenOnRequest = r.Header.Get(HeaderName)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	req.Header.Set(HeaderName, inboundID)
+	rec := httptest.NewRecorder()
+	Middleware(false)(next).ServeHTTP(rec, req)
+
+	if seenOnRequest == inboundID {
+		t.Fatal("untrusted inbound id was forwarded to the origin, want it replaced by the gateway's id")
+	}
+	if seenOnRequest != seenInContext {
+		t.Fatalf("request header %s = %q, want %q", HeaderName, seenOnRequest, seenInContext)
+	}
+}
+
 func TestMiddleware_GeneratesUniqueIDsAcrossRequests(t *testing.T) {
 	seen := map[string]bool{}
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

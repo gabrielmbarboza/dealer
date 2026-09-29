@@ -36,7 +36,15 @@ func Middleware(trustInbound bool) func(http.Handler) http.Handler {
 			}
 
 			w.Header().Set(HeaderName, id)
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, id)))
+
+			// Also set it on the request itself, so the reverse proxy forwards
+			// the gateway's id to the origin (letting it correlate its own
+			// logs) instead of whatever the client sent. Headers are cloned so
+			// the caller's request isn't mutated.
+			r = r.WithContext(context.WithValue(r.Context(), requestIDKey, id))
+			r.Header = r.Header.Clone()
+			r.Header.Set(HeaderName, id)
+			next.ServeHTTP(w, r)
 		})
 	}
 }
