@@ -187,6 +187,17 @@ DEALER_RATELIMIT_CLUSTER_JOIN_ADDR=gateway-1/<node-1-host>:7946
 
 Every response carries an `X-Request-Id` header, so a request can be correlated across the gateway's own logs (the `http_log` plugin includes it as `request_id=...`) and, if a downstream service also logs it, across services too: the same id is set on the request forwarded to the origin, replacing any `X-Request-Id` the client sent. By default the gateway always generates a fresh id, ignoring any `X-Request-Id` the client sent - set `DEALER_TRUST_REQUEST_ID=true` to instead reuse an inbound one, which only makes sense when Dealer sits behind a trusted upstream (e.g. a load balancer) that sets this header itself; otherwise a client could inject an arbitrary id into your logs.
 
+Some origins need the client's original `X-Request-Id` untouched - e.g. a payment provider that includes it in the signature of its webhooks, which the gateway's replacement would break. A service can opt into forwarding the inbound value to its origin with `preserve_request_id: true`. Only the origin sees it: the gateway still generates its own id for its logs, traces and the response header, so this doesn't let clients inject ids there (unlike `DEALER_TRUST_REQUEST_ID`, which applies to every service). When the client sends no `X-Request-Id`, the origin gets the gateway's id as usual:
+
+```yaml
+services:
+  - name: "payment-webhooks"
+    path: "/webhooks/payments"
+    origin_url: "http://0.0.0.0:3002"
+    methods: ["POST"]
+    preserve_request_id: true
+```
+
 Setting `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://localhost:4318`) turns on distributed tracing: every request gets a span (named `METHOD path`, tagged with the same request id from above) exported over OTLP/HTTP to that endpoint. This, deliberately, uses OpenTelemetry's own standard environment variables instead of `DEALER_*`-prefixed ones, so Dealer plugs into whatever OTel collector/backend you already run without inventing a parallel configuration surface; see the [OpenTelemetry docs](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) for the full set (headers, protocol, timeouts, etc.) that `OTEL_EXPORTER_OTLP_*` supports. Tracing is entirely opt-in: with the endpoint unset, spans are never created (the OpenTelemetry API's default is a no-op), so there's no cost to leaving it off. The active span's W3C trace context is also injected into the request forwarded to the origin (as a `traceparent` header), so a downstream service that's also instrumented continues the same trace instead of the gateway being a dead end.
 
 Environment variables:

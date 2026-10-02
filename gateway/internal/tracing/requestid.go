@@ -15,7 +15,12 @@ const HeaderName = "X-Request-Id"
 
 type contextKey struct{}
 
-var requestIDKey contextKey
+type inboundKey struct{}
+
+var (
+	requestIDKey contextKey
+	inboundIDKey inboundKey
+)
 
 // Middleware returns middleware that assigns every request a request id,
 // stored in its context (retrievable via FromContext) and echoed back on
@@ -41,12 +46,30 @@ func Middleware(trustInbound bool) func(http.Handler) http.Handler {
 			// the gateway's id to the origin (letting it correlate its own
 			// logs) instead of whatever the client sent. Headers are cloned so
 			// the caller's request isn't mutated.
-			r = r.WithContext(context.WithValue(r.Context(), requestIDKey, id))
+			ctx := context.WithValue(r.Context(), requestIDKey, id)
+			ctx = context.WithValue(ctx, inboundIDKey, r.Header.Get(HeaderName))
+			r = r.WithContext(ctx)
 			r.Header = r.Header.Clone()
 			r.Header.Set(HeaderName, id)
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// PreserveInbound restores, on the request forwarded to the origin, the
+// X-Request-Id the client originally sent (if any), for services that need
+// it untouched - e.g. a webhook whose provider signs that header. The
+// gateway still uses its own id for its logs, traces and the response
+// header, so an untrusted client can't inject ids there; only the origin
+// sees the inbound value, as if the gateway weren't in the way.
+func PreserveInbound(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if inbound, _ := r.Context().Value(inboundIDKey).(string); inbound != "" {
+			r.Header = r.Header.Clone()
+			r.Header.Set(HeaderName, inbound)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // FromContext returns the request id Middleware stored in ctx, or "" if

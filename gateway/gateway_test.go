@@ -230,6 +230,59 @@ services:
 	}
 }
 
+func TestGateway_PreserveRequestIDForwardsTheInboundIDOnlyForThatService(t *testing.T) {
+	seen := make(chan string, 2)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("X-Request-Id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(origin.Close)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "webhooks"
+    path: "/webhooks"
+    origin_url: %q
+    methods: ["POST"]
+    preserve_request_id: true
+  - name: "api"
+    path: "/api"
+    origin_url: %q
+    methods: ["POST"]
+`, origin.URL, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	for _, path := range []string{"/webhooks", "/api"} {
+		req, _ := http.NewRequest(http.MethodPost, server.URL+path, nil)
+		req.Header.Set("X-Request-Id", "provider-signed-id")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do(%s) error = %v", path, err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("X-Request-Id"); got == "provider-signed-id" {
+			t.Fatalf("%s: response X-Request-Id echoed the untrusted inbound value", path)
+		}
+	}
+
+	if got := <-seen; got != "provider-signed-id" {
+		t.Fatalf("webhooks origin saw X-Request-Id = %q, want the inbound %q", got, "provider-signed-id")
+	}
+	if got := <-seen; got == "provider-signed-id" {
+		t.Fatal("api origin saw the inbound X-Request-Id, want the gateway's fresh id")
+	}
+}
+
 func TestGateway_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin(t, "echo", nil)
 

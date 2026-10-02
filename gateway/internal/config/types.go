@@ -20,6 +20,12 @@ type Service struct {
 	// DELETE) for this service. Off by default, since retrying a
 	// non-idempotent request risks the origin executing it twice.
 	RetryUnsafeMethods bool `yaml:"retry_unsafe_methods"`
+
+	// PreserveRequestID forwards to this service's origin the X-Request-Id
+	// the client sent, instead of the gateway's own id. Off by default; for
+	// origins that need the original header, e.g. webhook providers that
+	// sign it. The gateway's logs and response still use its own id.
+	PreserveRequestID bool `yaml:"preserve_request_id"`
 }
 
 // HealthCheckConfig enables active health probing for a service's

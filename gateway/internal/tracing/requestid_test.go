@@ -148,3 +148,44 @@ func TestFromContext_EmptyWhenNotSet(t *testing.T) {
 		t.Fatalf("FromContext() = %q, want empty string when middleware never ran", got)
 	}
 }
+
+func TestPreserveInbound_ForwardsTheOriginalInboundHeader(t *testing.T) {
+	const inboundID = "provider-signed-id"
+
+	var forwarded, gatewayID string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded = r.Header.Get(HeaderName)
+		gatewayID = FromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks", nil)
+	req.Header.Set(HeaderName, inboundID)
+	rec := httptest.NewRecorder()
+	Middleware(false)(PreserveInbound(next)).ServeHTTP(rec, req)
+
+	if forwarded != inboundID {
+		t.Fatalf("forwarded %s = %q, want the original inbound value %q", HeaderName, forwarded, inboundID)
+	}
+	if gatewayID == "" || gatewayID == inboundID {
+		t.Fatalf("FromContext() = %q, want the gateway's own fresh id (logs stay untrusted)", gatewayID)
+	}
+	if got := rec.Header().Get(HeaderName); got != gatewayID {
+		t.Fatalf("response header %s = %q, want the gateway's id %q", HeaderName, got, gatewayID)
+	}
+}
+
+func TestPreserveInbound_KeepsTheGatewayIDWhenThereIsNoInboundHeader(t *testing.T) {
+	var forwarded, gatewayID string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded = r.Header.Get(HeaderName)
+		gatewayID = FromContext(r.Context())
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks", nil)
+	Middleware(false)(PreserveInbound(next)).ServeHTTP(httptest.NewRecorder(), req)
+
+	if forwarded == "" || forwarded != gatewayID {
+		t.Fatalf("forwarded %s = %q, want the gateway's id %q", HeaderName, forwarded, gatewayID)
+	}
+}

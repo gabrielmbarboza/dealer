@@ -415,7 +415,11 @@ func buildMux(cfg *config.Config, opts resolvedOptions, recorder *metrics.Record
 			}
 		}
 
-		return recorder.Wrap(svc.Name, plugin.Chain(plugins, rp)), nil
+		var handler http.Handler = plugin.Chain(plugins, rp)
+		if svc.PreserveRequestID {
+			handler = tracing.PreserveInbound(handler)
+		}
+		return recorder.Wrap(svc.Name, handler), nil
 	})
 	if err != nil {
 		return nil, nil, nil, err
