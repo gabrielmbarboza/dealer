@@ -356,6 +356,50 @@ services:
 	}
 }
 
+func TestGateway_ResponseCarriesOnlyTheGatewayRequestID(t *testing.T) {
+	// Origins that echo the request id they received (Rails does) must not
+	// add a second X-Request-Id to the response.
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", r.Header.Get("X-Request-Id")+"-from-origin")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(origin.Close)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "single"
+    path: "/single"
+    origin_url: %q
+  - name: "balanced"
+    path: "/balanced"
+    origin_urls: [%q, %q]
+`, origin.URL, origin.URL, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	for _, path := range []string{"/single", "/balanced"} {
+		resp, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", path, err)
+		}
+		resp.Body.Close()
+
+		ids := resp.Header.Values("X-Request-Id")
+		if len(ids) != 1 || strings.HasSuffix(ids[0], "-from-origin") {
+			t.Fatalf("%s: X-Request-Id values = %q, want only the gateway's id", path, ids)
+		}
+	}
+}
+
 func TestGateway_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin(t, "echo", nil)
 

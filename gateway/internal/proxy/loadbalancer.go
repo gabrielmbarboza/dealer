@@ -64,9 +64,10 @@ func NewOriginProxy(name string, originURLs []string, timeout, cooldown time.Dur
 			state.recordFailure(lb.now())
 			originalErrorHandler(w, r, err)
 		}
+		originalModifyResponse := rp.ModifyResponse
 		rp.ModifyResponse = func(resp *http.Response) error {
 			state.recordSuccess()
-			return nil
+			return originalModifyResponse(resp)
 		}
 		lb.origins = append(lb.origins, &roundRobinOrigin{url: u, handler: rp, state: state})
 	}

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/gabrielmbarboza/dealer/gateway/internal/tracing"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -82,6 +83,14 @@ func NewReverseProxy(name, originURL string, timeout time.Duration, retry RetryO
 		originalDirector(r)
 		r.Header.Set("User-Agent", userAgent)
 		traceContextPropagator.Inject(r.Context(), propagation.HeaderCarrier(r.Header))
+	}
+
+	// The gateway already set its own X-Request-Id on the response (see
+	// tracing.Middleware); an origin echoing the id it received would
+	// otherwise add a second one, since the proxy appends origin headers.
+	rp.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del(tracing.HeaderName)
+		return nil
 	}
 
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
