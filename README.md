@@ -20,7 +20,7 @@
 
 ## About <a name = "about"></a>
 
-Dealer is a lightweight API Gateway written in Go. It reads a `config.yml` file describing your internal services and forwards incoming requests to them, preserving HTTP methods, headers and body in both directions, with configuration changes picked up automatically at runtime, no restart needed.
+Dealer is a lightweight API Gateway written in Go. It reads a `config.yml` file describing your internal services and forwards incoming requests to them, preserving HTTP methods, headers and body in both directions (protocol upgrades such as WebSocket are tunneled through as well), with configuration changes picked up automatically at runtime, no restart needed.
 
 Beyond routing, Dealer handles the concerns a gateway sitting at the edge of a service architecture needs to: TLS termination with hot-reloadable certificates, load balancing with active health checks and a circuit breaker per origin, retry with backoff on transient failures, request size limits, JWT auth, CORS, rate limiting (in-memory or shared across instances), Prometheus metrics, OpenTelemetry tracing, and request-id correlation across services. Every one of these is opt-in and costs nothing when left unconfigured, see [Usage](#usage) for the full list and how to enable each one.
 

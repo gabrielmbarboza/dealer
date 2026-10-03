@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,5 +75,54 @@ func TestRecorder_HandlerServesExpositionFormat(t *testing.T) {
 	}
 	if !strings.Contains(body, "dealer_http_request_duration_seconds") {
 		t.Fatalf("body missing dealer_http_request_duration_seconds, got:\n%s", body)
+	}
+}
+
+// hijackableRecorder is an httptest.ResponseRecorder that also supports
+// connection hijacking, as a real server connection does.
+type hijackableRecorder struct {
+	*httptest.ResponseRecorder
+}
+
+func (h hijackableRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	server, client := net.Pipe()
+	_ = client.Close()
+	return server, bufio.NewReadWriter(bufio.NewReader(server), bufio.NewWriter(server)), nil
+}
+
+func TestRecorder_WrapRecordsAProtocolSwitchWhenTheConnectionIsHijacked(t *testing.T) {
+	r := New()
+	next := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Fatalf("Hijack() through the recorder error = %v", err)
+		}
+		_ = conn.Close()
+	})
+
+	handler := r.Wrap("live", next)
+	req := httptest.NewRequest(http.MethodGet, "/live", nil)
+	handler.ServeHTTP(hijackableRecorder{httptest.NewRecorder()}, req)
+
+	got := testutil.ToFloat64(r.requests.WithLabelValues("live", "GET", "101"))
+	if got != 1 {
+		t.Fatalf("requests counter for 101 = %v, want 1", got)
+	}
+}
+
+func TestRecorder_WrapKeepsFlushingAvailable(t *testing.T) {
+	r := New()
+	next := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write([]byte("chunk"))
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Fatalf("Flush() through the recorder error = %v", err)
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	r.Wrap("stream", next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stream", nil))
+
+	if !rec.Flushed {
+		t.Fatal("underlying writer was not flushed")
 	}
 }

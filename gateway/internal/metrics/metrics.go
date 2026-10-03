@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -58,4 +60,23 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController, so
+// flushing and the other optional interfaces keep working through the
+// recorder.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// Hijack hands the connection over for a protocol upgrade (e.g. WebSocket),
+// which the reverse proxy needs to tunnel it to the origin. The switch is
+// recorded as a 101, since the proxy writes that status straight to the
+// hijacked connection, bypassing WriteHeader.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil {
+		w.status = http.StatusSwitchingProtocols
+	}
+	return conn, rw, err
 }

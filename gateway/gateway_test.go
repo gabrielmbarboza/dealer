@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -280,6 +282,77 @@ services:
 	}
 	if got := <-seen; got == "provider-signed-id" {
 		t.Fatal("api origin saw the inbound X-Request-Id, want the gateway's fresh id")
+	}
+}
+
+func TestGateway_ProxiesProtocolUpgrades(t *testing.T) {
+	// An origin that switches protocols (as a WebSocket server would) and then
+	// echoes every line it reads back over the raw connection.
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "echo" {
+			http.Error(w, "upgrade required", http.StatusUpgradeRequired)
+			return
+		}
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("origin Hijack() error = %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n")
+		_ = rw.Flush()
+		line, err := rw.ReadString('\n')
+		if err != nil {
+			return
+		}
+		_, _ = rw.WriteString(line)
+		_ = rw.Flush()
+	}))
+	t.Cleanup(origin.Close)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "live"
+    path: "/live"
+    origin_url: %q
+    methods: ["GET"]
+`, origin.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(testWaitTimeout))
+
+	fmt.Fprintf(conn, "GET /live HTTP/1.1\r\nHost: gateway\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse() error = %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+
+	fmt.Fprint(conn, "ping\n")
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("ReadString() error = %v", err)
+	}
+	if line != "ping\n" {
+		t.Fatalf("echoed %q, want %q", line, "ping\n")
 	}
 }
 
