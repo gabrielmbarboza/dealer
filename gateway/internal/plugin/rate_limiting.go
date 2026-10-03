@@ -2,10 +2,11 @@ package plugin
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/gabrielmbarboza/dealer/gateway/internal/clientip"
 )
 
 const staleAfter = 10 * time.Minute
@@ -155,20 +156,12 @@ func (p *rateLimiting) Name() string { return "rate_limiting" }
 
 func (p *rateLimiting) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !p.store.allow(clientIP(r), p.requestsPerSecond, p.burst, p.now()) {
+		if !p.store.allow(clientip.FromRequest(r), p.requestsPerSecond, p.burst, p.now()) {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 func toFloat64(v any) (float64, error) {

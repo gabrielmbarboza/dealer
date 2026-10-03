@@ -400,6 +400,84 @@ services:
 	}
 }
 
+func TestGateway_RateLimitsEachClientBehindTrustedProxies(t *testing.T) {
+	origin := newEchoOrigin(t, "echo", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "echo"
+    path: "/echo"
+    origin_url: %q
+    plugins:
+      - name: rate_limiting
+        config:
+          requests_per_second: 0.001
+          burst: 1
+`, origin.URL))
+
+	statusFor := func(t *testing.T, serverURL, client string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, serverURL+"/echo", nil)
+		req.Header.Set("X-Forwarded-For", client)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	t.Run("the load balancer is trusted: each client has its own limit", func(t *testing.T) {
+		// The test server's peer is 127.0.0.1, standing in for the balancer.
+		gw, err := New(configPath, Options{PollInterval: testPollInterval, TrustedProxies: "127.0.0.1"})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		t.Cleanup(gw.Close)
+		server := httptest.NewServer(gw)
+		t.Cleanup(server.Close)
+
+		if got := statusFor(t, server.URL, "198.51.100.1"); got != http.StatusOK {
+			t.Fatalf("first client status = %d, want 200", got)
+		}
+		if got := statusFor(t, server.URL, "198.51.100.2"); got != http.StatusOK {
+			t.Fatalf("second client status = %d, want 200 (its own bucket)", got)
+		}
+		if got := statusFor(t, server.URL, "198.51.100.1"); got != http.StatusTooManyRequests {
+			t.Fatalf("first client again status = %d, want 429", got)
+		}
+	})
+
+	t.Run("nothing trusted: the header is ignored and the peer is limited", func(t *testing.T) {
+		gw, err := New(configPath, Options{PollInterval: testPollInterval})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		t.Cleanup(gw.Close)
+		server := httptest.NewServer(gw)
+		t.Cleanup(server.Close)
+
+		if got := statusFor(t, server.URL, "198.51.100.1"); got != http.StatusOK {
+			t.Fatalf("first request status = %d, want 200", got)
+		}
+		if got := statusFor(t, server.URL, "198.51.100.2"); got != http.StatusTooManyRequests {
+			t.Fatalf("forged client status = %d, want 429 (same peer)", got)
+		}
+	})
+}
+
+func TestGateway_RejectsInvalidTrustedProxies(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, "services: []\n")
+
+	if _, err := New(configPath, Options{PollInterval: testPollInterval, TrustedProxies: "not-an-ip"}); err == nil {
+		t.Fatal("New() error = nil, want an error for an invalid trusted proxy")
+	}
+}
+
 func TestGateway_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin(t, "echo", nil)
 

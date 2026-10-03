@@ -175,6 +175,7 @@ func main() {
 		BreakerThreshold:    breakerThreshold,
 		BreakerCooldown:     breakerCooldown,
 		TrustRequestID:      trustRequestID,
+		TrustedProxies:      os.Getenv("DEALER_TRUSTED_PROXIES"),
 		// OTLPEndpoint/ServiceName intentionally read OpenTelemetry's own
 		// standard env vars, not DEALER_*-prefixed ones, for interop with
 		// existing OTel tooling/collectors - see README.

@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/gabrielmbarboza/dealer/gateway/internal/clientip"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/config"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/metrics"
 	"github.com/gabrielmbarboza/dealer/gateway/internal/plugin"
@@ -124,6 +125,12 @@ type Options struct {
 	// inject an arbitrary id into the gateway's logs otherwise.
 	TrustRequestID bool
 
+	// TrustedProxies is a comma-separated list of CIDRs and/or IPs (e.g. a
+	// load balancer's subnet) whose X-Forwarded-For the gateway believes
+	// when identifying the client, as rate_limiting does. Empty (the
+	// default) trusts nothing: the client is the direct peer.
+	TrustedProxies string
+
 	// OTLPEndpoint enables OpenTelemetry tracing when set, exporting a
 	// span per request over OTLP/HTTP to this endpoint. Empty (the
 	// default) disables tracing entirely at effectively zero cost, since
@@ -189,6 +196,11 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		return nil, err
 	}
 
+	proxies, err := clientip.Parse(opts.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+
 	gw := &Gateway{metrics: metrics.New()}
 
 	serviceName := opts.ServiceName
@@ -206,9 +218,9 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		tracerProvider = tp
 	}
 
-	gw.handler = tracing.Middleware(opts.TrustRequestID)(tracing.SpanMiddleware(tracerProvider)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	gw.handler = clientip.Middleware(proxies)(tracing.Middleware(opts.TrustRequestID)(tracing.SpanMiddleware(tracerProvider)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gw.mux.Load().ServeHTTP(w, r)
-	})))
+	}))))
 
 	resolved := resolvedOptions{
 		originTimeout:       opts.OriginTimeout,
