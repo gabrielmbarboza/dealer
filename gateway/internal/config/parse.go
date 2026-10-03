@@ -3,10 +3,33 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// hostPattern is a lowercase DNS host name: dot-separated labels of letters,
+// digits and inner hyphens.
+var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
+
+// Hosts returns the distinct host names the services are restricted to,
+// sorted.
+func (c *Config) Hosts() []string {
+	seen := map[string]bool{}
+	for _, svc := range c.Services {
+		if svc.Host != "" {
+			seen[svc.Host] = true
+		}
+	}
+	hosts := make([]string, 0, len(seen))
+	for host := range seen {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	return hosts
+}
 
 // Parse decodes and validates gateway configuration YAML.
 func Parse(data []byte) (*Config, error) {
@@ -21,6 +44,9 @@ func Parse(data []byte) (*Config, error) {
 		}
 		if svc.Path == "" {
 			return nil, fmt.Errorf("config: service %q: path is required", svc.Name)
+		}
+		if svc.Host != "" && !hostPattern.MatchString(svc.Host) {
+			return nil, fmt.Errorf("config: service %q: host %q must be a lowercase host name, without scheme, port or path", svc.Name, svc.Host)
 		}
 		if svc.OriginURL == "" && len(svc.OriginURLs) == 0 {
 			return nil, fmt.Errorf("config: service %q: origin_url or origin_urls is required", svc.Name)

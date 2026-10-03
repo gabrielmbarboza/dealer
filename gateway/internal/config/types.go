@@ -7,8 +7,14 @@ type Config struct {
 
 // Service describes one internal service the gateway can forward requests to.
 type Service struct {
-	Name        string             `yaml:"name"`
-	Path        string             `yaml:"path"`
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+	// Host restricts the service to requests for this host name (e.g. a
+	// store's own domain). Routes with a host win over routes without one;
+	// a request whose host matches no service falls back to the host-less
+	// routes. With ACME on, it is also a domain the gateway gets a
+	// certificate for.
+	Host        string             `yaml:"host"`
 	OriginURL   string             `yaml:"origin_url"`
 	OriginURLs  []string           `yaml:"origin_urls"`
 	Methods     []string           `yaml:"methods"`

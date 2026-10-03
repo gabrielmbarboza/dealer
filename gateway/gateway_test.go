@@ -478,6 +478,71 @@ func TestGateway_RejectsInvalidTrustedProxies(t *testing.T) {
 	}
 }
 
+func TestGateway_RoutesByHost(t *testing.T) {
+	maria := newEchoOrigin(t, "maria", nil)
+	joao := newEchoOrigin(t, "joao", nil)
+	fallback := newEchoOrigin(t, "fallback", nil)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "maria"
+    host: "lojadamaria.com.br"
+    path: "/"
+    origin_url: %q
+  - name: "joao"
+    host: "joao.com.br"
+    path: "/"
+    origin_url: %q
+  - name: "fallback"
+    path: "/"
+    origin_url: %q
+`, maria.URL, joao.URL, fallback.URL))
+
+	gw, err := New(configPath, Options{PollInterval: testPollInterval})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(gw.Close)
+
+	server := httptest.NewServer(gw)
+	t.Cleanup(server.Close)
+
+	originFor := func(host string) string {
+		req, _ := http.NewRequest(http.MethodGet, server.URL+"/produtos", nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do(%s) error = %v", host, err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("X-Origin")
+	}
+
+	for host, want := range map[string]string{"lojadamaria.com.br": "maria", "joao.com.br:443": "joao", "outra.com": "fallback"} {
+		if got := originFor(host); got != want {
+			t.Errorf("host %s went to %q, want %q", host, got, want)
+		}
+	}
+
+	if !gw.HasHost("lojadamaria.com.br") || !gw.HasHost("JOAO.com.br.") || gw.HasHost("outra.com") {
+		t.Fatal("HasHost() does not match the configured hosts")
+	}
+
+	writeConfig(t, configPath, fmt.Sprintf(`
+services:
+  - name: "nova"
+    host: "lojanova.com.br"
+    path: "/"
+    origin_url: %q
+`, fallback.URL))
+	waitUntil(t, func() bool { return gw.HasHost("lojanova.com.br") })
+	if gw.HasHost("lojadamaria.com.br") {
+		t.Fatal("HasHost() kept a host removed from the config")
+	}
+}
+
 func TestGateway_FullPassthrough(t *testing.T) {
 	origin := newEchoOrigin(t, "echo", nil)
 

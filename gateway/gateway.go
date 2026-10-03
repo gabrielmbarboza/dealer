@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -162,7 +163,10 @@ type resolvedOptions struct {
 // Gateway is an http.Handler that forwards requests to internal services
 // as described by a hot-reloadable YAML config file.
 type Gateway struct {
-	mux     atomic.Pointer[http.ServeMux]
+	mux atomic.Pointer[http.ServeMux]
+	// hosts holds the current generation's configured host names (see
+	// HasHost), swapped together with mux on every reload.
+	hosts   atomic.Pointer[map[string]bool]
 	cancel  context.CancelFunc
 	metrics *metrics.Recorder
 	handler http.Handler
@@ -264,6 +268,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 		return nil, err
 	}
 	gw.mux.Store(mux)
+	gw.storeHosts(cfg)
 	gw.startProbers(probers)
 	gw.startLogFlusher(plugins)
 
@@ -278,6 +283,7 @@ func New(configPath string, opts Options) (*Gateway, error) {
 			return err
 		}
 		gw.mux.Store(newMux)
+		gw.storeHosts(newCfg)
 		gw.startProbers(newProbers)
 		gw.startLogFlusher(newPlugins)
 		return nil
@@ -288,6 +294,26 @@ func New(configPath string, opts Options) (*Gateway, error) {
 	go watcher.Start(ctx)
 
 	return gw, nil
+}
+
+func (g *Gateway) storeHosts(cfg *config.Config) {
+	hosts := map[string]bool{}
+	for _, host := range cfg.Hosts() {
+		hosts[host] = true
+	}
+	g.hosts.Store(&hosts)
+}
+
+// HasHost reports whether the current config has a service for host
+// (case-insensitive, trailing dot ignored). It follows hot reloads, so a
+// domain added to the config is accepted right away - e.g. by the ACME
+// host policy that decides which certificates the gateway may request.
+func (g *Gateway) HasHost(host string) bool {
+	hosts := g.hosts.Load()
+	if hosts == nil {
+		return false
+	}
+	return (*hosts)[strings.TrimSuffix(strings.ToLower(host), ".")]
 }
 
 // startProbers starts probers under a fresh context and cancels whichever

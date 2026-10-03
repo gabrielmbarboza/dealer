@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -275,5 +276,34 @@ func TestLoad_ReadsFileFromDisk(t *testing.T) {
 func TestLoad_MissingFileErrors(t *testing.T) {
 	if _, err := Load("/nonexistent/path/config.yml"); err == nil {
 		t.Fatal("Load() error = nil, want non-nil")
+	}
+}
+
+func TestParse_HostIsOptionalAndValidated(t *testing.T) {
+	cfg, err := Parse([]byte(`
+services:
+  - name: "maria"
+    host: "lojadamaria.com.br"
+    path: "/"
+    origin_url: "http://maria:8080"
+  - name: "any"
+    path: "/"
+    origin_url: "http://web:8080"
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got := cfg.Services[0].Host; got != "lojadamaria.com.br" {
+		t.Fatalf("Host = %q, want %q", got, "lojadamaria.com.br")
+	}
+	if got := cfg.Hosts(); len(got) != 1 || got[0] != "lojadamaria.com.br" {
+		t.Fatalf("Hosts() = %v, want [lojadamaria.com.br]", got)
+	}
+
+	for _, host := range []string{"https://loja.com", "loja.com:443", "loja.com/x", "Loja.com", "-loja.com", "loja..com"} {
+		_, err := Parse([]byte(fmt.Sprintf("services:\n  - name: \"s\"\n    host: %q\n    path: \"/\"\n    origin_url: \"http://web\"\n", host)))
+		if err == nil {
+			t.Errorf("Parse() with host %q error = nil, want a validation error", host)
+		}
 	}
 }

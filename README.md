@@ -141,6 +141,20 @@ services:
       interval: "5s"     # falls back to DEALER_HEALTH_CHECK_INTERVAL if omitted
 ```
 
+A service can be restricted to a host name with `host`, so one gateway can front several sites, each on its own domain. Routes with a host win over routes without one, and a request whose host matches no service falls back to the host-less routes:
+
+```yaml
+services:
+  - name: "loja-da-maria"
+    host: "lojadamaria.com.br"
+    path: "/"
+    origin_url: "http://maria-web:8080"
+  - name: "loja-do-joao"
+    host: "joao.com.br"
+    path: "/"
+    origin_url: "http://joao-web:8080"
+```
+
 When `DEALER_RETRY_MAX_ATTEMPTS` is set above its default of `1`, a request that fails with a transient network error (connection refused, timeout - not a 4xx/5xx response, which is a valid answer from the origin) is retried with exponential backoff. Only idempotent methods (`GET`, `HEAD`, `OPTIONS`) are retried by default, since retrying a `POST` risks the origin executing it twice; a service can opt into retrying non-idempotent methods if it knows that's safe:
 
 ```yaml

@@ -21,14 +21,17 @@ func Build(cfg *config.Config, handlerFor func(config.Service) (http.Handler, er
 			return nil, fmt.Errorf("service %q: %w", svc.Name, err)
 		}
 
+		// A host restricts the route to that domain; ServeMux prefers the
+		// host-specific pattern over a host-less one.
+		pattern := svc.Host + svc.Path
 		if len(svc.Methods) == 0 {
-			mux.Handle(svc.Path, h)
+			mux.Handle(pattern, h)
 			continue
 		}
 
 		hasOptions := false
 		for _, method := range svc.Methods {
-			mux.Handle(method+" "+svc.Path, h)
+			mux.Handle(method+" "+pattern, h)
 			if method == http.MethodOptions {
 				hasOptions = true
 			}
@@ -39,7 +42,7 @@ func Build(cfg *config.Config, handlerFor func(config.Service) (http.Handler, er
 		// methods - otherwise the mux itself 405s them before the plugin
 		// chain ever runs.
 		if !hasOptions && hasCORSPlugin(svc) {
-			mux.Handle(http.MethodOptions+" "+svc.Path, h)
+			mux.Handle(http.MethodOptions+" "+pattern, h)
 		}
 	}
 
