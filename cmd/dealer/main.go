@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gabrielmbarboza/cmd/dealer/internal/acmecert"
 	"github.com/gabrielmbarboza/cmd/dealer/internal/tlscert"
 	dealer "github.com/gabrielmbarboza/dealer/config"
 	"github.com/gabrielmbarboza/dealer/gateway"
@@ -38,9 +39,22 @@ const DefaultTLSReloadInterval = 30 * time.Second
 // DefaultListenAddr is used when DEALER_LISTEN_ADDR is not set.
 const DefaultListenAddr = "0.0.0.0:3000"
 
+// DefaultACMEListenAddr and DefaultACMEHTTPAddr are the HTTPS listener and the
+// HTTP-01 challenge/redirect listener when ACME certificates are on and the
+// addresses are not set: the CA reaches the standard ports.
+const (
+	DefaultACMEListenAddr = "0.0.0.0:443"
+	DefaultACMEHTTPAddr   = "0.0.0.0:80"
+)
+
 func main() {
 	configPath := envOr("DEALER_CONFIG_PATH", "config.yml")
-	listenAddr := envOr("DEALER_LISTEN_ADDR", DefaultListenAddr)
+	acmeEmail := os.Getenv("DEALER_ACME_EMAIL")
+	defaultListen := DefaultListenAddr
+	if acmeEmail != "" {
+		defaultListen = DefaultACMEListenAddr
+	}
+	listenAddr := envOr("DEALER_LISTEN_ADDR", defaultListen)
 
 	pollInterval := gateway.DefaultPollInterval
 	if raw := os.Getenv("DEALER_CONFIG_POLL_INTERVAL"); raw != "" {
@@ -187,6 +201,32 @@ func main() {
 	}
 	defer gw.Close()
 
+	// ACME (DEALER_ACME_EMAIL): one certificate per configured host, issued
+	// and renewed automatically; mutually exclusive with certificate files.
+	var acmeHTTPSrv *http.Server
+	if acmeEmail != "" {
+		if tlsConfig != nil {
+			log.Fatalf("main: DEALER_ACME_EMAIL and DEALER_TLS_CERT_FILE/DEALER_TLS_KEY_FILE are mutually exclusive")
+		}
+		manager, err := acmecert.New(acmecert.Options{
+			Email:        acmeEmail,
+			CacheDir:     os.Getenv("DEALER_ACME_CACHE_DIR"),
+			DirectoryURL: os.Getenv("DEALER_ACME_DIRECTORY_URL"),
+			Allowed:      gw.HasHost,
+		})
+		if err != nil {
+			log.Fatalf("main: %v", err)
+		}
+		tlsConfig = manager.TLSConfig()
+		// Answers the CA's HTTP-01 challenges and redirects everything
+		// else to HTTPS.
+		acmeHTTPSrv = &http.Server{
+			Addr:              envOr("DEALER_ACME_HTTP_ADDR", DefaultACMEHTTPAddr),
+			Handler:           manager.HTTPHandler(nil),
+			ReadHeaderTimeout: readHeaderTimeout,
+		}
+	}
+
 	metricsSrv := newMetricsServer(os.Getenv("DEALER_METRICS_ADDR"), gw.MetricsHandler())
 
 	infoPath, ok := os.LookupEnv("DEALER_INFO_PATH")
@@ -236,6 +276,15 @@ func main() {
 		}()
 	}
 
+	if acmeHTTPSrv != nil {
+		go func() {
+			log.Printf("main: ACME challenge and HTTPS redirect server listening on %s", acmeHTTPSrv.Addr)
+			if err := acmeHTTPSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("main: ACME challenge server error: %v", err)
+			}
+		}()
+	}
+
 	if metricsSrv != nil {
 		go func() {
 			log.Printf("main: metrics server listening on %s", metricsSrv.Addr)
@@ -259,6 +308,9 @@ func main() {
 		}
 		if metricsSrv != nil {
 			_ = metricsSrv.Shutdown(shutdownCtx)
+		}
+		if acmeHTTPSrv != nil {
+			_ = acmeHTTPSrv.Shutdown(shutdownCtx)
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Fatalf("main: graceful shutdown failed: %v", err)
