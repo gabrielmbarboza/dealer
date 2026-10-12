@@ -1,5 +1,6 @@
 // Package plugin defines the gateway's plugin contract and the built-in
-// plugins (add_header, http_log, request_size_limiting, jwt_auth).
+// plugins (add_header, response_headers, http_log, request_size_limiting,
+// jwt_auth, cors, rate_limiting).
 package plugin
 
 import "net/http"

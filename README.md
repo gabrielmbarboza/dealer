@@ -27,6 +27,7 @@ Beyond routing, Dealer handles the concerns a gateway sitting at the edge of a s
 It also supports a small plugin system that runs before a request is forwarded to its service:
 
 - `add_header` - adds HTTP headers to the forwarded request.
+- `response_headers` - sets HTTP headers on the response sent back to the client (e.g. `Strict-Transport-Security`, `Content-Security-Policy`), optionally only for a given response `Content-Type`.
 - `http_log` - logs every request that hits the gateway.
 - `request_size_limiting` - blocks requests whose body exceeds a configured size.
 - `jwt_auth` - blocks requests without a valid JWT (accepted via header or query string).
@@ -124,6 +125,26 @@ services:
       - "http://0.0.0.0:3001"
       - "http://0.0.0.0:3004"
     methods: ["GET"]
+```
+
+`response_headers` sets headers on the response the client receives, replacing any value the origin sent for the same header - `add_header` only touches the request forwarded to the origin. Headers are applied just before the status line is written, so they also reach responses the gateway produces itself (e.g. a 502). A rule adds headers only when the response `Content-Type` starts with its `content_type`, e.g. to keep a single-page app's HTML shell always revalidated while its hashed assets stay cacheable. Declare it first in the plugin list, so it also covers responses from plugins that block a request (`jwt_auth`, `rate_limiting`):
+
+```yaml
+services:
+  - name: "web"
+    host: "app.example.com"
+    path: "/"
+    origin_url: "http://web:80"
+    plugins:
+      - name: response_headers
+        config:
+          headers:
+            Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+            Content-Security-Policy: "default-src 'self'; frame-ancestors 'none'"
+          rules:
+            - content_type: "text/html"
+              headers:
+                Cache-Control: "no-cache"
 ```
 
 A service can also opt into active health checks with `health_check`, so an origin that's already unhealthy is skipped *before* it ever fails a real request, and rejoins automatically once it recovers. This is independent of (and complements) the reactive cooldown above:
@@ -242,7 +263,7 @@ Environment variables:
 - `DEALER_TRUSTED_PROXIES` - comma-separated CIDRs and/or IPs of proxies in front of the gateway (e.g. a load balancer's subnet) whose `X-Forwarded-For` is believed when identifying the client, as `rate_limiting` does (default: empty, trust nothing - the client is the direct peer). Invalid entries stop the gateway at startup.
 - `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP/HTTP endpoint spans are exported to (e.g. `http://localhost:4318`). Unset by default: tracing is entirely opt-in. Deliberately not `DEALER_`-prefixed - see above.
 - `OTEL_SERVICE_NAME` - service name attached to exported spans (default: `dealer`). Only relevant when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-- `DEALER_TLS_CERT_FILE` / `DEALER_TLS_KEY_FILE` - paths to a PEM certificate and private key. When both are set, the gateway terminates TLS itself on `0.0.0.0:3000` instead of serving plaintext HTTP; setting only one of the two fails fast at startup. Both files are re-read periodically so a renewed certificate is picked up without a restart. ACME/Let's Encrypt automation isn't supported - provide the cert/key pair yourself (e.g. from a reverse proxy, `certbot`, or your own CA).
+- `DEALER_TLS_CERT_FILE` / `DEALER_TLS_KEY_FILE` - paths to a PEM certificate and private key. When both are set, the gateway terminates TLS itself on `0.0.0.0:3000` instead of serving plaintext HTTP; setting only one of the two fails fast at startup. Both files are re-read periodically so a renewed certificate is picked up without a restart. For certificates obtained automatically, use `DEALER_ACME_EMAIL` below instead.
 - `DEALER_TLS_RELOAD_INTERVAL` - how often the cert/key files are checked for changes, as a Go duration (default: `30s`). Only relevant when TLS is enabled. The debug/pprof and metrics servers are unaffected by these variables and always serve plaintext HTTP - bind them to a local/internal interface, not the public network.
 - `DEALER_ACME_EMAIL` - turns on automatic certificates over ACME (Let's Encrypt by default): one per `host` in the config, requested on the first HTTPS request for that host and renewed before expiry. Only configured hosts get certificates, and a host added to the config is served right after the hot reload. The address the CA uses for notices. Mutually exclusive with `DEALER_TLS_CERT_FILE`/`DEALER_TLS_KEY_FILE`; with it on, `DEALER_LISTEN_ADDR` defaults to `0.0.0.0:443`.
 - `DEALER_ACME_CACHE_DIR` - where certificates and the ACME account key are kept (default: `acme-cache`). Put it on a volume that survives restarts, or every restart requests new certificates and runs into the CA's rate limits.
