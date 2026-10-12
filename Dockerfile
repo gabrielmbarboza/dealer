@@ -14,6 +14,10 @@ FROM alpine:3.24.1
 ARG VERSION
 RUN apk --no-cache add ca-certificates
 RUN addgroup -S dealer && adduser -S -G dealer dealer
+# Writable home for the ACME certificate cache. A named volume mounted here
+# starts with this ownership, so the unprivileged user can write to it.
+RUN mkdir -p /var/lib/dealer/acme && chown -R dealer:dealer /var/lib/dealer
+ENV DEALER_ACME_CACHE_DIR=/var/lib/dealer/acme
 COPY --from=builder /go/bin/app /app
 COPY --from=builder /go/src/app/config.yml /config.yml
 USER dealer
