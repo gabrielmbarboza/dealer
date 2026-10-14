@@ -1,13 +1,19 @@
 ARG VERSION=dev
 
 #build stage
-FROM golang:1.25.11-alpine AS builder
+# The build stage runs on the builder's own architecture and cross-builds for the target
+# (amd64 and arm64 in CI). BuildKit sets BUILDPLATFORM; the default keeps the classic
+# builder working.
+ARG BUILDPLATFORM=linux/amd64
+FROM --platform=$BUILDPLATFORM golang:1.25.11-alpine AS builder
 ARG VERSION
+ARG TARGETOS
+ARG TARGETARCH
 RUN apk add --no-cache git
 WORKDIR /go/src/app
 COPY . .
 RUN go mod download
-RUN go build -ldflags "-X github.com/gabrielmbarboza/dealer/config.Version=${VERSION}" -o /go/bin/app -v ./cmd/dealer
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X github.com/gabrielmbarboza/dealer/config.Version=${VERSION}" -o /go/bin/app -v ./cmd/dealer
 
 #final stage
 FROM alpine:3.24.1
