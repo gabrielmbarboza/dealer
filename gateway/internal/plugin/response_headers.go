@@ -121,7 +121,7 @@ func (w *responseHeadersWriter) applyOnce() {
 		return
 	}
 	w.applied = true
-	w.plugin.apply(w.ResponseWriter.Header())
+	w.plugin.apply(w.Header())
 }
 
 func (w *responseHeadersWriter) WriteHeader(code int) {

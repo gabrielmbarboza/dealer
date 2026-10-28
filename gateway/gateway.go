@@ -453,7 +453,7 @@ func buildMux(cfg *config.Config, opts resolvedOptions, recorder *metrics.Record
 			}
 		}
 
-		var handler http.Handler = plugin.Chain(plugins, rp)
+		handler := plugin.Chain(plugins, rp)
 		if svc.PreserveRequestID {
 			handler = tracing.PreserveInbound(handler)
 		}
