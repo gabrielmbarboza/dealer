@@ -1,3 +1,3 @@
 module github.com/gabrielmbarboza/dealer/loadtest
 
-go 1.25.11
+go 1.26.11

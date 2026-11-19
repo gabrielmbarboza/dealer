@@ -10,7 +10,7 @@ This repository is a [Go workspace](https://go.dev/ref/mod#workspaces) (`go.work
 - `config` — static project metadata (`ProjectInfo`).
 - `gateway` — the gateway itself: config loading/hot-reload, routing, plugins and reverse proxying.
 
-Requires Go 1.25.11 or later (see `go.work`).
+Requires Go 1.26.11 or later (see `go.work`).
 
 Run the gateway locally:
 
