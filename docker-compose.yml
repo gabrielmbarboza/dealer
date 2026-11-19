@@ -6,14 +6,20 @@ services:
       dockerfile: ./Dockerfile
       args:
         VERSION: ${VERSION:-dev}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       - 3000:3000
     environment:
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your environment or a .env file, see .env.example}
       - DEALER_CONFIG_POLL_INTERVAL=${DEALER_CONFIG_POLL_INTERVAL:-2s}
       - DEALER_CONFIG_PATH=/workspace/config.yml
+      - DEALER_INFO_PATH=
     volumes:
-      # Bind-mounting the containing directory (rather than config.yml
-      # directly) so hot-reload keeps working when an editor/tool saves the
-      # file via rename - a single-file bind mount goes stale in that case.
-      - .:/workspace:ro
+      # Bind-mounting the directory (rather than config.yml itself) so
+      # hot-reload keeps working when an editor/tool saves the file via
+      # rename - a single-file bind mount goes stale in that case. conf/
+      # holds only the config, so nothing else (e.g. .env) is exposed.
+      - ./conf:/workspace:ro

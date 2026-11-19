@@ -15,7 +15,7 @@ RATE="${RATE:-200}"
 DURATION="${DURATION:-20s}"
 
 CONFIG_PATH="$RESULTS_DIR/reload-config.yml"
-cp "$REPO_ROOT/config.yml" "$CONFIG_PATH"
+cp "$REPO_ROOT/conf/config.yml" "$CONFIG_PATH"
 export CONFIG_PATH
 export DEALER_CONFIG_POLL_INTERVAL="${DEALER_CONFIG_POLL_INTERVAL:-500ms}"
 
@@ -29,7 +29,7 @@ esac
 (
 	sleep "$mid_sleep"
 	echo "reload.sh: rewriting config mid-attack to trigger hot-reload" >&2
-	sed 's/X-Gateway: "dealer"/X-Gateway: "dealer-reloaded"/' "$REPO_ROOT/config.yml" >"$CONFIG_PATH"
+	sed 's/X-Gateway: "dealer"/X-Gateway: "dealer-reloaded"/' "$REPO_ROOT/conf/config.yml" >"$CONFIG_PATH"
 ) &
 mutator_pid=$!
 

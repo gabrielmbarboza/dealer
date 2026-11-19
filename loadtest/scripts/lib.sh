@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/loadtest/results}"
-JWT_SECRET="${JWT_SECRET:-loadtest-secret}"
+JWT_SECRET="${JWT_SECRET:-loadtest-secret-0123456789-0123456789}"
 export JWT_SECRET
 
 export PATH="$(go env GOPATH)/bin:$PATH"
@@ -21,7 +21,7 @@ start_env() {
 	# CONFIG_PATH lets callers (e.g. reload.sh) point the gateway at a
 	# scratch copy of config.yml instead of the repo's own, so hot-reload
 	# experiments don't touch a tracked file.
-	export DEALER_CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.yml}"
+	export DEALER_CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/conf/config.yml}"
 
 	echo "lib.sh: building gateway and stubs..." >&2
 	go build -o "$RESULTS_DIR/dealer" "$REPO_ROOT/cmd/dealer"
