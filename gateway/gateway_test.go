@@ -622,7 +622,7 @@ services:
 }
 
 func TestGateway_JWTAuthBlocksWithoutValidToken(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", "test-secret-0123456789-0123456789-abcd")
 
 	var calls int32
 	origin := newEchoOrigin(t, "payments", &calls)
@@ -865,7 +865,7 @@ services:
 }
 
 func TestGateway_MetricsHandlerReflectsRequestsAcrossServices(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", "test-secret-0123456789-0123456789-abcd")
 
 	catalog := newEchoOrigin(t, "catalog", nil)
 	payments := newEchoOrigin(t, "payments", nil)

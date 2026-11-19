@@ -9,8 +9,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const minJWTSecretBytes = 32
+
 type jwtAuth struct {
-	secret []byte
+	secret          []byte
+	allowQueryToken bool
 }
 
 func newJWTAuth(cfg map[string]any) (Plugin, error) {
@@ -24,14 +27,25 @@ func newJWTAuth(cfg map[string]any) (Plugin, error) {
 		return nil, fmt.Errorf("jwt_auth: environment variable %q is not set", envName)
 	}
 
-	return &jwtAuth{secret: []byte(secret)}, nil
+	if len(secret) < minJWTSecretBytes {
+		return nil, fmt.Errorf("jwt_auth: environment variable %q must hold at least %d bytes", envName, minJWTSecretBytes)
+	}
+
+	allowQueryToken := false
+	if raw, ok := cfg["allow_query_token"]; ok {
+		if allowQueryToken, ok = raw.(bool); !ok {
+			return nil, fmt.Errorf("jwt_auth: config.allow_query_token must be a boolean, got %T", raw)
+		}
+	}
+
+	return &jwtAuth{secret: []byte(secret), allowQueryToken: allowQueryToken}, nil
 }
 
 func (p *jwtAuth) Name() string { return "jwt_auth" }
 
 func (p *jwtAuth) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenString := extractToken(r)
+		tokenString := p.extractToken(r)
 		if tokenString == "" {
 			http.Error(w, "missing jwt", http.StatusUnauthorized)
 			return
@@ -42,7 +56,7 @@ func (p *jwtAuth) Wrap(next http.Handler) http.Handler {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			return p.secret, nil
-		})
+		}, jwt.WithExpirationRequired())
 		if err != nil || !token.Valid {
 			http.Error(w, "invalid jwt", http.StatusUnauthorized)
 			return
@@ -52,11 +66,14 @@ func (p *jwtAuth) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-func extractToken(r *http.Request) string {
+func (p *jwtAuth) extractToken(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		if rest, ok := strings.CutPrefix(auth, "Bearer "); ok {
 			return rest
 		}
+	}
+	if !p.allowQueryToken {
+		return ""
 	}
 	return r.URL.Query().Get("token")
 }
