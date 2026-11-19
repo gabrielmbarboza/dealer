@@ -90,3 +90,37 @@ func TestFromRequest_FallsBackToTheDirectPeerWithoutTheMiddleware(t *testing.T) 
 		t.Fatalf("FromRequest() = %q, want %q", got, "203.0.113.7")
 	}
 }
+
+func TestMiddleware_StripsForwardingHeadersFromUntrustedPeers(t *testing.T) {
+	trusted, _ := Parse("10.0.0.0/8")
+	var got http.Header
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.7:5000"
+	req.Header.Set("X-Forwarded-For", "1.1.1.1")
+	req.Header.Set("X-Real-IP", "1.1.1.1")
+	req.Header.Set("Forwarded", "for=1.1.1.1")
+	Middleware(trusted)(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	for _, name := range []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"} {
+		if v := got.Get(name); v != "" {
+			t.Fatalf("%s = %q, want it stripped for an untrusted peer", name, v)
+		}
+	}
+}
+
+func TestMiddleware_KeepsForwardingHeadersFromTrustedPeers(t *testing.T) {
+	trusted, _ := Parse("10.0.0.0/8")
+	var got http.Header
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:5000"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+	Middleware(trusted)(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if v := got.Get("X-Forwarded-For"); v != "198.51.100.1" {
+		t.Fatalf("X-Forwarded-For = %q, want it kept for a trusted peer", v)
+	}
+}

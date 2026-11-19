@@ -78,6 +78,16 @@ func (res *Resolver) Resolve(r *http.Request) string {
 	return client
 }
 
+var forwardingHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"}
+
+func (res *Resolver) peerTrusted(r *http.Request) bool {
+	if res == nil || len(res.trusted) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(peerAddr(r))
+	return err == nil && res.isTrusted(addr)
+}
+
 func (res *Resolver) isTrusted(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	for _, prefix := range res.trusted {
@@ -94,7 +104,14 @@ func Middleware(res *Resolver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := context.WithValue(r.Context(), clientIPKey, res.Resolve(r))
-			next.ServeHTTP(w, r.WithContext(ctx))
+			r = r.WithContext(ctx)
+			if !res.peerTrusted(r) {
+				r.Header = r.Header.Clone()
+				for _, name := range forwardingHeaders {
+					r.Header.Del(name)
+				}
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
