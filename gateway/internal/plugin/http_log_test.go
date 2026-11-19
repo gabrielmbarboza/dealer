@@ -173,3 +173,16 @@ func TestFlushLoggers_FlushesHTTPLogInstancesAndIgnoresOthers(t *testing.T) {
 		t.Fatalf("log output = %q, want it to contain the buffered line after FlushLoggers", logged)
 	}
 }
+
+func TestHTTPLog_EscapesControlCharactersInThePath(t *testing.T) {
+	var buf bytes.Buffer
+	p := newHTTPLogWithWriter(&buf)
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog%0A2026/01/01%2000:00:00%20GET%20/admin", nil)
+	p.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+	p.Flush()
+
+	if lines := strings.Count(buf.String(), "\n"); lines != 1 {
+		t.Fatalf("log output has %d lines, want 1 (a request must not forge log lines): %q", lines, buf.String())
+	}
+}

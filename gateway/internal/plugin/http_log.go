@@ -45,7 +45,7 @@ func (p *httpLog) Name() string { return "http_log" }
 
 func (p *httpLog) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p.log(r.Method, r.URL.Path, tracing.FromContext(r.Context()))
+		p.log(r.Method, r.URL.EscapedPath(), tracing.FromContext(r.Context()))
 		next.ServeHTTP(w, r)
 	})
 }
