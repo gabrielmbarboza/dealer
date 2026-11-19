@@ -30,7 +30,7 @@ It also supports a small plugin system that runs before a request is forwarded t
 - `response_headers` - sets HTTP headers on the response sent back to the client (e.g. `Strict-Transport-Security`, `Content-Security-Policy`), optionally only for a given response `Content-Type`.
 - `http_log` - logs every request that hits the gateway.
 - `request_size_limiting` - blocks requests whose body exceeds a configured size.
-- `jwt_auth` - blocks requests without a valid JWT (accepted via header or query string).
+- `jwt_auth` - blocks requests without a valid JWT sent as `Authorization: Bearer <token>`. The signing secret must be at least 32 bytes long and every token must carry an `exp` claim. Set `allow_query_token: true` to also accept `?token=` (for browser WebSocket/SSE clients that cannot send headers); URLs end up in proxy logs and browser history, so keep those tokens short-lived.
 - `rate_limiting` - blocks requests once a client IP exceeds a configured requests-per-second rate, allowing short bursts. Per-instance in-memory by default; can share counters across gateway instances instead (see [Usage](#usage)).
 - `cors` - adds CORS response headers for allowed origins and answers preflight `OPTIONS` requests directly, without forwarding them to the service.
 
@@ -40,7 +40,7 @@ These instructions will get you a copy of the project up and running on your loc
 
 ### Prerequisites
 
-- [Go](https://go.dev/dl/) 1.25.11 or later (the workspace's `go.mod`/`go.work` files declare `go 1.25.11`; with `GOTOOLCHAIN=auto`, the `go` command downloads it automatically if you have an older version installed).
+- [Go](https://go.dev/dl/) 1.26.11 or later (the workspace's `go.mod`/`go.work` files declare `go 1.26.11`; with `GOTOOLCHAIN=auto`, the `go` command downloads it automatically if you have an older version installed).
 - Or [Docker](https://docs.docker.com/get-docker/), if you'd rather not install Go locally.
 
 ### Installing
@@ -55,7 +55,7 @@ cd dealer
 Run it directly with Go (uses the Go workspace defined in `go.work`):
 
 ```
-go run ./cmd/dealer
+DEALER_CONFIG_PATH=conf/config.yml go run ./cmd/dealer
 ```
 
 Or build and run the container with Docker Compose (copy `.env.example` to `.env` first and set `JWT_SECRET`, required by `config.yml`'s `jwt_auth` plugins):
@@ -65,17 +65,19 @@ cp .env.example .env
 docker compose up --build
 ```
 
+The image declares a `HEALTHCHECK` (`/app healthcheck`, a TCP connect to the listen address), so `docker ps` shows `healthy` once the gateway accepts connections.
+
 The image is tagged `dev` by default; to embed a real released version (e.g. after checking out a tag), export `VERSION` before building - `docker-compose.yml` passes it through as the `VERSION` build arg, which is compiled into the binary and reported by `GET /` on the gateway:
 
 ```
 VERSION=$(git describe --tags --always) docker compose up --build
 ```
 
-The gateway listens on `0.0.0.0:3000` by default (override with `DEALER_LISTEN_ADDR`) and reads `config.yml` from the current directory by default. Under Docker Compose, the project directory is bind-mounted read-only, so editing `config.yml` on the host is picked up by hot-reload without rebuilding the image.
+The gateway listens on `0.0.0.0:3000` by default (override with `DEALER_LISTEN_ADDR`) and reads `config.yml` from the current directory by default (the sample lives in `conf/config.yml`, so point `DEALER_CONFIG_PATH` at it when running from the repo root). Under Docker Compose, the `conf/` directory (and nothing else) is bind-mounted read-only, so editing `conf/config.yml` on the host is picked up by hot-reload without rebuilding the image.
 
 ## Usage <a name = "usage"></a>
 
-Edit `config.yml` to declare your internal services, their routes and plugins:
+Edit `conf/config.yml` to declare your internal services, their routes and plugins:
 
 ```yaml
 services:
@@ -88,6 +90,7 @@ services:
       - name: jwt_auth
         config:
           secret_env: JWT_SECRET
+          # allow_query_token: true   # also accept ?token=<jwt>; off by default
 ```
 
 Routes may include a path parameter, e.g. `path: "/orders/{id}"`, which matches any value in that segment.
@@ -220,6 +223,8 @@ DEALER_RATELIMIT_CLUSTER_SERVER_ID=gateway-2
 DEALER_RATELIMIT_CLUSTER_JOIN_ADDR=gateway-1/<node-1-host>:7946
 ```
 
+> **Network exposure:** SugarDB's gossip (`7946`, TCP and UDP) and RAFT (random TCP port) listeners carry no authentication or encryption, so Dealer binds both to `127.0.0.1` unless `DEALER_RATELIMIT_CLUSTER_BIND_ADDR` names an IP. In a cluster, set it to each node's private address (a wildcard like `0.0.0.0` is refused) and allow those ports through the firewall only between gateway nodes, never from clients or the internet. If you don't need counters shared across instances, keep the default `mode: memory`, which opens nothing.
+
 `DEALER_RATELIMIT_CLUSTER_JOIN_ADDR` must be in `<remote-server-id>/<host>:<discovery-port>` form (memberlist, which SugarDB uses for cluster membership, requires the node name prefix) - not just `host:port`. Every node needs a unique `DEALER_RATELIMIT_CLUSTER_SERVER_ID`, matching whatever other nodes reference in their own `JOIN_ADDR`; if running more than one node on the same host, each also needs its own `DEALER_RATELIMIT_CLUSTER_DISCOVERY_PORT`. Single-instance distributed mode (the example above, with no cluster variables set) doesn't need any of this and works standalone. Two-node replication is covered by an automated integration test (`TestSugarDBStore_TwoNodeClusterReplicatesCounters`) that bootstraps one node, joins a second, and confirms a counter incremented on the first is visible on the second.
 
 Every response carries an `X-Request-Id` header, so a request can be correlated across the gateway's own logs (the `http_log` plugin includes it as `request_id=...`) and, if a downstream service also logs it, across services too: the same id is set on the request forwarded to the origin, replacing any `X-Request-Id` the client sent. By default the gateway always generates a fresh id, ignoring any `X-Request-Id` the client sent - set `DEALER_TRUST_REQUEST_ID=true` to instead reuse an inbound one, which only makes sense when Dealer sits behind a trusted upstream (e.g. a load balancer) that sets this header itself; otherwise a client could inject an arbitrary id into your logs.
@@ -241,7 +246,7 @@ Environment variables:
 
 - `DEALER_LISTEN_ADDR` - address the gateway's public HTTP(S) listener binds to (default: `0.0.0.0:3000`).
 - `DEALER_CONFIG_PATH` - path to the config file (default: `config.yml`).
-- `DEALER_INFO_PATH` - path of the `GET` endpoint reporting the gateway's project info and version (default: `/`). Serving it at `/` shadows any service configured at the root path - e.g. a web app routed through the gateway - so move it (e.g. `/_dealer`) or set it to an empty value to disable it.
+- `DEALER_INFO_PATH` - path of the `GET` endpoint reporting the gateway's project info and version (default: `/`; the Compose files set it empty, which disables it, so the version is not exposed). Serving it at `/` shadows any service configured at the root path - e.g. a web app routed through the gateway - so move it (e.g. `/_dealer`) or set it to an empty value to disable it.
 - `DEALER_CONFIG_POLL_INTERVAL` - how often the config file is checked for changes, as a Go duration (e.g. `2s`, default: `2s`).
 - `DEALER_ORIGIN_TIMEOUT` - how long to wait when dialing/reading response headers from an internal service before failing with a 502, as a Go duration (default: `10s`).
 - `DEALER_MAX_BODY_BYTES` - default request body size cap (in bytes) applied to every service, even ones without their own `request_size_limiting` plugin (default: `10485760`, i.e. 10 MiB).
@@ -253,7 +258,7 @@ Environment variables:
 - `DEALER_RETRY_BACKOFF_BASE` - base delay between retry attempts, as a Go duration (default: `100ms`); actual delay grows exponentially with jitter added. Only relevant when `DEALER_RETRY_MAX_ATTEMPTS` is above `1`.
 - `DEALER_CIRCUIT_BREAKER_THRESHOLD` - number of consecutive failures on an origin that trips its circuit breaker, gateway-wide (default: `0`, i.e. the breaker is disabled and only the reactive cooldown above applies).
 - `DEALER_CIRCUIT_BREAKER_COOLDOWN` - how long a tripped breaker stays open before allowing a single trial request through, as a Go duration (default: `30s`); escalates on each further failed trial. Only relevant when `DEALER_CIRCUIT_BREAKER_THRESHOLD` is above `0`.
-- `DEALER_RATELIMIT_CLUSTER_BIND_ADDR` - address the embedded SugarDB instance binds to (default: `localhost`). Only relevant when at least one `rate_limiting` plugin uses `mode: distributed`.
+- `DEALER_RATELIMIT_CLUSTER_BIND_ADDR` - IP the embedded SugarDB instance binds its gossip and RAFT listeners to (default: `127.0.0.1`; must be a specific IP, not `0.0.0.0`; in a cluster, this node's private address). Only relevant when at least one `rate_limiting` plugin uses `mode: distributed`.
 - `DEALER_RATELIMIT_CLUSTER_JOIN_ADDR` - `<remote-server-id>/<host>:<discovery-port>` of an existing cluster member to join, for multi-node distributed rate limiting. Leave unset for a single, standalone instance.
 - `DEALER_RATELIMIT_CLUSTER_BOOTSTRAP` - set to `true` on the first node to bootstrap a new cluster (default: `false`). Not needed for a single, standalone instance.
 - `DEALER_RATELIMIT_CLUSTER_SERVER_ID` - unique identifier for this node within the cluster; required by SugarDB's underlying RAFT layer once clustering (`DEALER_RATELIMIT_CLUSTER_BOOTSTRAP` or `DEALER_RATELIMIT_CLUSTER_JOIN_ADDR`) is used, and is what other nodes reference in their own `DEALER_RATELIMIT_CLUSTER_JOIN_ADDR`.
@@ -313,7 +318,7 @@ This project is licensed under the [MIT License](LICENSE).
 [version-url]: https://github.com/gabrielmbarboza/dealer/tags
 [ci-image]: https://github.com/gabrielmbarboza/dealer/actions/workflows/ci.yml/badge.svg
 [ci-url]: https://github.com/gabrielmbarboza/dealer/actions/workflows/ci.yml
-[go-image]: https://img.shields.io/badge/go-1.25.11-00ADD8?style=flat-square&logo=go
+[go-image]: https://img.shields.io/badge/go-1.26.11-00ADD8?style=flat-square&logo=go
 [go-url]: https://go.dev/dl/
 [license-image]: https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square
 [license-url]: LICENSE
