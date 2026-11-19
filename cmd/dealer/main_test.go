@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,5 +178,42 @@ func TestNewRootMux_EmptyPathDisablesInfo(t *testing.T) {
 func TestNewRootMux_RejectsRelativePath(t *testing.T) {
 	if _, err := newRootMux(gatewayStub, "_dealer"); err == nil {
 		t.Fatal("newRootMux() error = nil, want an error for a path without a leading slash")
+	}
+}
+
+func TestAuxiliaryServers_BoundIdleConnections(t *testing.T) {
+	servers := map[string]*http.Server{
+		"acme":    newACMEHTTPServer("127.0.0.1:0", http.NotFoundHandler()),
+		"metrics": newMetricsServer("127.0.0.1:0", http.NotFoundHandler()),
+		"debug":   newDebugServer("127.0.0.1:0"),
+	}
+	for name, s := range servers {
+		if s.ReadHeaderTimeout <= 0 || s.IdleTimeout <= 0 {
+			t.Errorf("%s server: ReadHeaderTimeout = %v, IdleTimeout = %v, want both set", name, s.ReadHeaderTimeout, s.IdleTimeout)
+		}
+	}
+	if s := servers["acme"]; s.ReadTimeout <= 0 || s.WriteTimeout <= 0 {
+		t.Errorf("acme server: ReadTimeout = %v, WriteTimeout = %v, want both set", s.ReadTimeout, s.WriteTimeout)
+	}
+}
+
+func TestHealthcheck(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_, port, _ := net.SplitHostPort(addr)
+
+	if err := healthcheck(addr); err != nil {
+		t.Errorf("healthcheck(%q) = %v, want nil while listening", addr, err)
+	}
+	if err := healthcheck("0.0.0.0:" + port); err != nil {
+		t.Errorf("healthcheck(0.0.0.0:%s) = %v, want a wildcard address probed via loopback", port, err)
+	}
+
+	_ = ln.Close()
+	if err := healthcheck(addr); err == nil {
+		t.Errorf("healthcheck(%q) = nil, want an error once nothing listens", addr)
 	}
 }

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux, served only by the opt-in debug server
+	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
@@ -55,6 +57,14 @@ func main() {
 		defaultListen = DefaultACMEListenAddr
 	}
 	listenAddr := envOr("DEALER_LISTEN_ADDR", defaultListen)
+
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := healthcheck(listenAddr); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	pollInterval := gateway.DefaultPollInterval
 	if raw := os.Getenv("DEALER_CONFIG_POLL_INTERVAL"); raw != "" {
@@ -220,11 +230,7 @@ func main() {
 		tlsConfig = manager.TLSConfig()
 		// Answers the CA's HTTP-01 challenges and redirects everything
 		// else to HTTPS.
-		acmeHTTPSrv = &http.Server{
-			Addr:              envOr("DEALER_ACME_HTTP_ADDR", DefaultACMEHTTPAddr),
-			Handler:           manager.HTTPHandler(nil),
-			ReadHeaderTimeout: readHeaderTimeout,
-		}
+		acmeHTTPSrv = newACMEHTTPServer(envOr("DEALER_ACME_HTTP_ADDR", DefaultACMEHTTPAddr), manager.HTTPHandler(nil))
 	}
 
 	metricsSrv := newMetricsServer(os.Getenv("DEALER_METRICS_ADDR"), gw.MetricsHandler())
@@ -351,6 +357,18 @@ func newDebugServer(addr string) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
+func newACMEHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 }
 
@@ -364,6 +382,8 @@ func newMetricsServer(addr string, handler http.Handler) *http.Server {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 }
 
@@ -392,6 +412,24 @@ func infoHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(dealer.ProjectInfo()); err != nil {
 		log.Printf("main: encode info response: %v", err)
 	}
+}
+
+// healthcheck reports whether the gateway accepts connections on its listen
+// address. It backs the container HEALTHCHECK, which cannot use curl or wget
+// on a minimal image and must work for plain HTTP, TLS and ACME alike.
+func healthcheck(listenAddr string) error {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return err
+	}
+	if ip, err := netip.ParseAddr(host); host == "" || (err == nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 2*time.Second)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func envOr(key, fallback string) string {
