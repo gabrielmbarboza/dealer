@@ -21,7 +21,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X github.com/gabrielmbarboza/dealer/config.Version=${VERSION}" -o /go/bin/app -v ./cmd/dealer
 
 #final stage
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 ARG VERSION
 RUN apk --no-cache upgrade && apk --no-cache add ca-certificates
 RUN addgroup -S dealer && adduser -S -G dealer dealer
