@@ -205,3 +205,20 @@ func TestRateLimiting_Name(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", p.Name(), "rate_limiting")
 	}
 }
+
+func TestRateLimiting_IPv6ClientsShareTheirSlash64Bucket(t *testing.T) {
+	p, err := newTestRateLimiting(t, map[string]any{"requests_per_second": 1, "burst": 1}, "")
+	if err != nil {
+		t.Fatalf("newRateLimiting() error = %v", err)
+	}
+
+	if code := serveRateLimited(p, "[2001:db8:1:2::1]:1111"); code != http.StatusOK {
+		t.Fatalf("first address: status = %d, want %d", code, http.StatusOK)
+	}
+	if code := serveRateLimited(p, "[2001:db8:1:2:ffff::9]:2222"); code != http.StatusTooManyRequests {
+		t.Fatalf("second address in the same /64: status = %d, want %d", code, http.StatusTooManyRequests)
+	}
+	if code := serveRateLimited(p, "[2001:db8:1:3::1]:3333"); code != http.StatusOK {
+		t.Fatalf("address in another /64: status = %d, want %d", code, http.StatusOK)
+	}
+}

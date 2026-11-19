@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -156,12 +157,20 @@ func (p *rateLimiting) Name() string { return "rate_limiting" }
 
 func (p *rateLimiting) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !p.store.allow(clientip.FromRequest(r), p.requestsPerSecond, p.burst, p.now()) {
+		if !p.store.allow(rateLimitKey(clientip.FromRequest(r)), p.requestsPerSecond, p.burst, p.now()) {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Is4() || addr.Is4In6() {
+		return ip
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
 }
 
 func toFloat64(v any) (float64, error) {
