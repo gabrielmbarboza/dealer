@@ -374,3 +374,44 @@ func TestNewReverseProxy_ReusesConnectionsToOrigin(t *testing.T) {
 			got, concurrency*waves, waves, concurrency, want)
 	}
 }
+
+func TestNewReverseProxy_ForwardingHeaders(t *testing.T) {
+	var got *http.Request
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r }))
+	defer origin.Close()
+
+	rp, err := NewReverseProxy("svc", origin.URL+"/base", time.Second, RetryOptions{})
+	if err != nil {
+		t.Fatalf("NewReverseProxy() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://gateway.example/dir?q=1", nil)
+	req.RemoteAddr = "203.0.113.7:5000"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header["User-Agent"] = nil
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("origin was not reached")
+	}
+	if got.URL.Path != "/base/dir" || got.URL.RawQuery != "q=1" {
+		t.Errorf("origin URL = %v, want /base/dir?q=1", got.URL)
+	}
+	if got.Host != "gateway.example" {
+		t.Errorf("origin Host = %q, want the client's host", got.Host)
+	}
+	if xff := got.Header.Get("X-Forwarded-For"); xff != "198.51.100.1, 203.0.113.7" {
+		t.Errorf("X-Forwarded-For = %q, want inbound chain with the peer appended", xff)
+	}
+	if h := got.Header.Get("X-Forwarded-Host"); h != "gateway.example" {
+		t.Errorf("X-Forwarded-Host = %q, want the gateway's own view, not the client's claim", h)
+	}
+	if p := got.Header.Get("X-Forwarded-Proto"); p != "http" {
+		t.Errorf("X-Forwarded-Proto = %q, want http", p)
+	}
+	if ua := got.Header.Values("User-Agent"); len(ua) != 0 {
+		t.Errorf("User-Agent = %q, want none rather than Go's default", ua)
+	}
+}

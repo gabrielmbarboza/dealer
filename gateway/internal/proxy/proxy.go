@@ -64,7 +64,7 @@ func NewReverseProxy(name, originURL string, timeout time.Duration, retry RetryO
 		return nil, fmt.Errorf("proxy: invalid origin_url %q: missing scheme or host", originURL)
 	}
 
-	rp := httputil.NewSingleHostReverseProxy(target)
+	rp := &httputil.ReverseProxy{}
 	var transport http.RoundTripper = &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout: timeout,
@@ -77,12 +77,13 @@ func NewReverseProxy(name, originURL string, timeout time.Duration, retry RetryO
 	}
 	rp.Transport = transport
 
-	originalDirector := rp.Director
-	rp.Director = func(r *http.Request) {
-		userAgent := r.Header.Get("User-Agent")
-		originalDirector(r)
-		r.Header.Set("User-Agent", userAgent)
-		traceContextPropagator.Inject(r.Context(), propagation.HeaderCarrier(r.Header))
+	rp.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = pr.In.Host
+		pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+		pr.SetXForwarded()
+		pr.Out.Header.Set("User-Agent", pr.In.Header.Get("User-Agent"))
+		traceContextPropagator.Inject(pr.Out.Context(), propagation.HeaderCarrier(pr.Out.Header))
 	}
 
 	// The gateway already set its own X-Request-Id on the response (see
