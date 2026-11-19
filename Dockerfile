@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags 
 #final stage
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG VERSION
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache upgrade && apk --no-cache add ca-certificates
 RUN addgroup -S dealer && adduser -S -G dealer dealer
 # Writable home for the ACME certificate cache. A named volume mounted here
 # starts with this ownership, so the unprivileged user can write to it.
