@@ -105,3 +105,26 @@ func TestSugarDBStore_TwoNodeClusterReplicatesCounters(t *testing.T) {
 		t.Fatal("nodeB.allow() = true, want false: the limit was already reached by node A and replicated to node B")
 	}
 }
+
+func TestResolveBindAddr(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "127.0.0.1", false},
+		{"localhost", "127.0.0.1", false},
+		{"127.0.0.1", "127.0.0.1", false},
+		{"10.0.0.5", "10.0.0.5", false},
+		{"fd00::5", "fd00::5", false},
+		{"0.0.0.0", "", true},
+		{"::", "", true},
+		{"node-1.internal", "", true},
+	}
+	for _, tt := range tests {
+		got, err := resolveBindAddr(tt.in)
+		if (err != nil) != tt.wantErr || got != tt.want {
+			t.Errorf("resolveBindAddr(%q) = %q, %v; want %q, error=%v", tt.in, got, err, tt.want, tt.wantErr)
+		}
+	}
+}

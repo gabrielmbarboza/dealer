@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -54,15 +55,38 @@ type sugarDBNodeConfig struct {
 	discoveryPort uint16
 }
 
+// resolveBindAddr returns the IP the embedded SugarDB's gossip and RAFT
+// listeners bind to. SugarDB's own defaults leave both reachable from the
+// network with no authentication, so the default is loopback and a cluster
+// node must name the private IP the other nodes reach it on. A wildcard is
+// refused: RAFT also advertises this address to its peers.
+func resolveBindAddr(addr string) (string, error) {
+	switch addr {
+	case "":
+		return "127.0.0.1", nil
+	case "localhost":
+		return "127.0.0.1", nil
+	}
+	ip, err := netip.ParseAddr(addr)
+	if err != nil || ip.IsUnspecified() {
+		return "", fmt.Errorf("DEALER_RATELIMIT_CLUSTER_BIND_ADDR %q must be a specific IP address", addr)
+	}
+	return ip.String(), nil
+}
+
 // newSugarDBInstance starts one embedded SugarDB node from nc. Kept
 // separate from getSharedSugarDBStore (which reads its configuration from
 // the environment) so cluster-joining behavior can be exercised directly
 // in tests without needing separate OS processes/env vars per node.
 func newSugarDBInstance(nc sugarDBNodeConfig) (*sugarDBStore, error) {
-	cfg := sugardb.DefaultConfig()
-	if nc.bindAddr != "" {
-		cfg.BindAddr = nc.bindAddr
+	bindAddr, err := resolveBindAddr(nc.bindAddr)
+	if err != nil {
+		return nil, err
 	}
+
+	cfg := sugardb.DefaultConfig()
+	cfg.BindAddr = bindAddr
+	cfg.RaftBindAddr = bindAddr
 	if nc.joinAddr != "" {
 		cfg.JoinAddr = nc.joinAddr
 	}
